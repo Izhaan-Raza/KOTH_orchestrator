@@ -20,26 +20,18 @@ RUN apt-get update && apt-get install -y \
     findutils \
     && rm -rf /var/lib/apt/lists/*
 
-# King file
-RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.txt && chmod 777 /root
+# King file (Locked down: readable by SLA bot, writable ONLY by root)
+RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 644 /root/king.txt && chmod 700 /root
 
 # Apache config
-RUN a2enmod rewrite
 COPY apache2.conf /etc/apache2/sites-available/000-default.conf
+RUN a2enmod rewrite
 
-# Setup script
+# Setup script (Executes during the build)
 COPY setup.sh /setup.sh
-RUN chmod +x /setup.sh
-
-# PrivEsc: SUID on find
-RUN chmod u+s /usr/bin/find
+RUN chmod +x /setup.sh && /setup.sh
 
 EXPOSE 80
 
-CMD ["/bin/bash", "-c", "service mysql start && sleep 3 && \
-    mysql -e \"CREATE DATABASE IF NOT EXISTS wordpress;\" && \
-    mysql -e \"CREATE USER IF NOT EXISTS 'wpuser'@'localhost' IDENTIFIED BY 'wppassword';\" && \
-    mysql -e \"GRANT ALL ON wordpress.* TO 'wpuser'@'localhost';\" && \
-    mysql -e \"FLUSH PRIVILEGES;\" && \
-    service apache2 start && \
-    tail -f /var/log/apache2/access.log"]
+# Keep services running robustly without relying on logs or crashing on warnings
+CMD ["/bin/bash", "-c", "mkdir -p /var/run/mysqld && chown mysql:mysql /var/run/mysqld && service mysql start ; service apache2 start ; tail -f /dev/null"]

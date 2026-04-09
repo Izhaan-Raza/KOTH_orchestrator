@@ -7,6 +7,7 @@ services:
   machineH1A:
     build: ./machineH1A
     container_name: machineH1A
+    image: machineh1a
     ports:
       - "10001:80"
     restart: unless-stopped
@@ -16,6 +17,7 @@ services:
   machineH1B:
     build: ./machineH1B
     container_name: machineH1B
+    image: machineh1b
     ports:
       - "10002:6379"
       - "10003:22"
@@ -24,10 +26,11 @@ services:
   machineH1C:
     build: ./machineH1C
     container_name: machineH1C
+    image: machineh1c
     ports:
       - "10004:21"
       - "10005:80"
-      - "10006:30000-31000"
+      - "30000-31000:30000-31000"
     restart: unless-stopped
     cap_add:
       - SYS_ADMIN
@@ -38,6 +41,7 @@ services:
   machineH2A:
     build: ./machineH2A
     container_name: machineH2A
+    image: machineh2a
     ports:
       - "10010:8080"
     restart: unless-stopped
@@ -45,6 +49,7 @@ services:
   machineH2B:
     build: ./machineH2B
     container_name: machineH2B
+    image: machineh2b
     ports:
       - "10011:80"
     restart: unless-stopped
@@ -52,6 +57,7 @@ services:
   machineH2C:
     build: ./machineH2C
     container_name: machineH2C
+    image: machineh2c
     ports:
       - "10012:8080"
     restart: unless-stopped
@@ -62,6 +68,7 @@ services:
   machineH3A:
     build: ./machineH3A
     container_name: machineH3A
+    image: machineh3a
     ports:
       - "10020:445"
       - "10021:22"
@@ -72,6 +79,7 @@ services:
   machineH3B:
     build: ./machineH3B
     container_name: machineH3B
+    image: machineh3b
     ports:
       - "10022:80"
     restart: unless-stopped
@@ -79,6 +87,7 @@ services:
   machineH3C:
     build: ./machineH3C
     container_name: machineH3C
+    image: machineh3c
     ports:
       - "10023:80"
     restart: unless-stopped
@@ -91,6 +100,7 @@ services:
   machineH4A:
     build: ./machineH4A
     container_name: machineH4A
+    image: machineh4a
     ports:
       - "10030:3000"
     restart: unless-stopped
@@ -98,6 +108,7 @@ services:
   machineH4B:
     build: ./machineH4B
     container_name: machineH4B
+    image: machineh4b
     ports:
       - "10031:8080"
     restart: unless-stopped
@@ -105,6 +116,7 @@ services:
   machineH4C:
     build: ./machineH4C
     container_name: machineH4C
+    image: machineh4c
     ports:
       - "10032:80"
     restart: unless-stopped
@@ -115,6 +127,7 @@ services:
   machineH5A:
     build: ./machineH5A
     container_name: machineH5A
+    image: machineh5a
     ports:
       - "10040:10000"
     restart: unless-stopped
@@ -122,6 +135,7 @@ services:
   machineH5B:
     build: ./machineH5B
     container_name: machineH5B
+    image: machineh5b
     ports:
       - "10041:9200"
     restart: unless-stopped
@@ -129,6 +143,7 @@ services:
   machineH5C:
     build: ./machineH5C
     container_name: machineH5C
+    image: machineh5c
     ports:
       - "10042:8080"
     restart: unless-stopped
@@ -139,6 +154,7 @@ services:
   machineH6A:
     build: ./machineH6A
     container_name: machineH6A
+    image: machineh6a
     ports:
       - "10050:3632"
       - "10051:2049"
@@ -150,15 +166,17 @@ services:
   machineH6B:
     build: ./machineH6B
     container_name: machineH6B
+    image: machineh6b
     ports:
       - "10052:27017"
     restart: unless-stopped
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker.sock for PrivEsc
+      - /var/run/docker.sock:/var/run/docker.sock # Docker.sock for PrivEsc
 
   machineH6C:
     build: ./machineH6C
     container_name: machineH6C
+    image: machineh6c
     ports:
       - "10053:443"
     restart: unless-stopped
@@ -171,6 +189,7 @@ services:
   machineH7A:
     build: ./machineH7A
     container_name: machineH7A
+    image: machineh7a
     ports:
       - "10060:161/udp"
       - "10061:22"
@@ -179,6 +198,7 @@ services:
   machineH7B:
     build: ./machineH7B
     container_name: machineH7B
+    image: machineh7b
     ports:
       - "10062:3000"
     restart: unless-stopped
@@ -186,6 +206,7 @@ services:
   machineH7C:
     build: ./machineH7C
     container_name: machineH7C
+    image: machineh7c
     ports:
       - "10063:873"
     restart: unless-stopped
@@ -196,6 +217,7 @@ services:
   machineH8A:
     build: ./machineH8A
     container_name: machineH8A
+    image: machineh8a
     ports:
       - "10070:80"
     restart: unless-stopped
@@ -203,6 +225,7 @@ services:
   machineH8B:
     build: ./machineH8B
     container_name: machineH8B
+    image: machineh8b
     ports:
       - "10071:5000"
     restart: unless-stopped
@@ -210,6 +233,7 @@ services:
   machineH8C:
     build: ./machineH8C
     container_name: machineH8C
+    image: machineh8c
     ports:
       - "10072:8000"
     restart: unless-stopped
