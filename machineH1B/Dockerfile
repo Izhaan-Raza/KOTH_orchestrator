@@ -7,29 +7,18 @@ RUN apt-get update && apt-get install -y \
     openssh-server \
     && rm -rf /var/lib/apt/lists/*
 
-# King file
-RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.txt && chmod 777 /root
+# King file (Read by SLA bot, writable ONLY by root)
+RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 644 /root/king.txt && chmod 700 /root
 
-# Create redis user with SSH access to /root/.ssh
-RUN mkdir -p /root/.ssh && chmod 777 /root/.ssh
+# Prepare SSH directory with strict permissions so OpenSSH accepts the keys
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
-# Configure Redis - no auth, bind all interfaces
-RUN sed -i 's/bind 127.0.0.1 -::1/bind 0.0.0.0/' /etc/redis/redis.conf && \
-    sed -i 's/protected-mode yes/protected-mode no/' /etc/redis/redis.conf
-
-# Configure SSH
+# Configure SSH (Crucial: Disable passwords to force the Redis exploit!)
 RUN mkdir /var/run/sshd && \
     echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && \
-    echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config
-
-# Redis config for SSH key injection via SLAVEOF/CONFIG SET
-# The redis user needs write access to /root/.ssh/
-RUN chown -R redis:redis /root/.ssh/ 2>/dev/null || true && \
-    chmod -R 777 /root/.ssh/
-
-# Set root password for SSH (teams gain root via SSH after writing key)
-RUN echo 'root:koth2024' | chpasswd
+    echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config
 
 EXPOSE 6379 22
 
-CMD ["/bin/bash", "-c", "service ssh start && redis-server /etc/redis/redis.conf --daemonize no"]
+# Run Redis directly with vulnerable flags, bypassing the brittle config file
+CMD ["/bin/bash", "-c", "service ssh start && redis-server --bind 0.0.0.0 --protected-mode no --daemonize no"]
