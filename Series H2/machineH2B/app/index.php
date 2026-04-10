@@ -1,53 +1,37 @@
 <?php
-// Vulnerable shop application - SQL Injection in product search
-$host = 'localhost';
-$db   = 'shopdb';
-$user = 'appuser';
-$pass = 'app123';
+mysqli_report(MYSQLI_REPORT_OFF);
+session_start();
+// Force TCP connection to bypass UNIX socket permissions
+$conn = new mysqli('127.0.0.1', 'appuser', 'app123', 'admin_panel');
 
-$conn = new mysqli($host, $user, $pass, $db);
-if ($conn->connect_error) {
-    // Show error to assist exploitation
-    die("Connection failed: " . $conn->connect_error);
-}
+$error = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $user = $_POST['username'];
+    $pass = $_POST['password'];
 
-$result_html = '';
-$search = '';
-
-if (isset($_GET['search'])) {
-    $search = $_GET['search']; // NO sanitization - intentionally vulnerable
-    // VULNERABLE: Direct string interpolation -> SQL Injection
-    $query = "SELECT id, name, price, description FROM products WHERE name LIKE '%" . $search . "%'";
+    // VULNERABLE: Direct string interpolation
+    $query = "SELECT * FROM users WHERE username = '$user' AND password = '$pass'";
     $result = $conn->query($query);
-    if ($result) {
-        while ($row = $result->fetch_assoc()) {
-            $result_html .= "<tr><td>{$row['id']}</td><td>{$row['name']}</td><td>\${$row['price']}</td><td>{$row['description']}</td></tr>";
-        }
+
+    if ($result && $result->num_rows > 0) {
+        $_SESSION['logged_in'] = true;
+        header("Location: admin.php");
+        exit();
     } else {
-        $result_html = "<tr><td colspan='4'>Error: " . $conn->error . "</td></tr>";
+        $error = "Invalid credentials!";
     }
 }
 ?>
 <!DOCTYPE html>
 <html>
-<head><title>KoTH Shop</title>
-<style>body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;padding:2em;}
-input{padding:8px;width:300px;} button{padding:8px 16px;background:#0f3460;color:white;border:none;cursor:pointer;}
-table{width:100%;border-collapse:collapse;margin-top:1em;}
-th,td{border:1px solid #444;padding:8px;}th{background:#0f3460;}</style>
-</head>
-<body>
-<h1>Product Search</h1>
-<form method="GET">
-    <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Search products...">
-    <button type="submit">Search</button>
-</form>
-<?php if ($search): ?>
-<h2>Results for: <?= htmlspecialchars($search) ?></h2>
-<table><tr><th>ID</th><th>Name</th><th>Price</th><th>Description</th></tr>
-<?= $result_html ?>
-</table>
-<!-- Hint: try injecting into the search parameter -->
-<?php endif; ?>
+<head><title>Admin Portal</title></head>
+<body style="background:#111; color:#0f0; font-family:monospace; padding: 50px;">
+    <h2>KoTH Internal Dashboard</h2>
+    <form method="POST">
+        Username: <input type="text" name="username"><br><br>
+        Password: <input type="password" name="password"><br><br>
+        <input type="submit" value="Login">
+    </form>
+    <p style="color:red;"><?= $error ?></p>
 </body>
 </html>

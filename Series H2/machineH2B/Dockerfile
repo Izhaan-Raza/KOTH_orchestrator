@@ -7,27 +7,29 @@ RUN apt-get update && apt-get install -y \
     mysql-server \
     php \
     php-mysql \
+    sudo \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# King file
-RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.txt && chmod 777 /root
+RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && \
+    chmod 600 /root/king.txt && \
+    chmod 700 /root
 
-# Deploy vulnerable PHP app
 COPY app/ /var/www/html/
-RUN chown -R www-data:www-data /var/www/html/ && chmod -R 755 /var/www/html/
+RUN rm -f /var/www/html/index.html && \
+    chown -R www-data:www-data /var/www/html/ && \
+    chmod -R 755 /var/www/html/
 
-# Apache config
-COPY apache2.conf /etc/apache2/sites-available/000-default.conf
-RUN a2enmod rewrite
-
-# MySQL setup - configure to run queries as root (FILE privilege + sys_exec via UDF)
-# MySQL itself runs as mysql user but we configure it to allow dangerous operations
 COPY mysql-setup.sql /docker-entrypoint-initdb.d/setup.sql
+
+# PrivEsc Vector: www-data can run the mysql client as root
+RUN echo "www-data ALL=(root) NOPASSWD: /usr/bin/mysql" >> /etc/sudoers
 
 EXPOSE 80
 
 CMD ["/bin/bash", "-c", \
-    "service mysql start && sleep 3 && \
-     mysql < /docker-entrypoint-initdb.d/setup.sql && \
-     service apache2 start && \
-     tail -f /var/log/apache2/error.log"]
+    "service mysql start && \
+    while ! mysqladmin ping --silent; do sleep 1; done && \
+    mysql < /docker-entrypoint-initdb.d/setup.sql && \
+    service apache2 start && \
+    tail -f /var/log/apache2/error.log"]

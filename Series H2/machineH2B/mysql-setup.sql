@@ -1,40 +1,16 @@
--- Database and vulnerable user setup
-CREATE DATABASE IF NOT EXISTS shopdb;
-USE shopdb;
+CREATE DATABASE IF NOT EXISTS admin_panel;
+USE admin_panel;
 
--- Create a table with product data
-CREATE TABLE IF NOT EXISTS products (
+CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255),
-    price DECIMAL(10,2),
-    description TEXT
+    username VARCHAR(255),
+    password VARCHAR(255)
 );
 
-INSERT INTO products (name, price, description) VALUES
-    ('Widget A', 9.99, 'A fine widget'),
-    ('Widget B', 19.99, 'An even finer widget'),
-    ('Widget C', 4.99, 'Budget widget');
+-- The player doesn't know this password, they must bypass it
+INSERT INTO users (username, password) VALUES ('admin', 'Th3_M0st_S3cur3_P4ssw0rd_3v3r');
 
--- Create app user with file privileges (for UDF/sys_exec path)
-CREATE USER IF NOT EXISTS 'appuser'@'localhost' IDENTIFIED BY 'app123';
-GRANT ALL PRIVILEGES ON shopdb.* TO 'appuser'@'localhost';
-
--- Create root user accessible from app (PrivEsc via sys_exec)
--- sys_exec UDF: allows command execution via SELECT sys_exec('cmd');
--- We simulate this by configuring MySQL to allow FILE privilege
-GRANT FILE ON *.* TO 'appuser'@'localhost';
-GRANT SUPER ON *.* TO 'appuser'@'localhost';
+-- Changed 'localhost' to '127.0.0.1' for TCP access
+CREATE USER IF NOT EXISTS 'appuser'@'127.0.0.1' IDENTIFIED BY 'app123';
+GRANT ALL PRIVILEGES ON admin_panel.* TO 'appuser'@'127.0.0.1';
 FLUSH PRIVILEGES;
-
--- Simulated sys_exec via a stored procedure (no UDF binary needed)
-DELIMITER //
-CREATE PROCEDURE exec_cmd(IN cmd VARCHAR(255))
-BEGIN
-    SET @q = CONCAT('SELECT "', cmd, '" INTO OUTFILE "/tmp/cmd_output"');
-    -- Note: Real sys_exec requires a compiled .so UDF
-    -- This setup leaves secure_file_priv empty for file read/write
-END //
-DELIMITER ;
-
--- Allow MySQL to write files anywhere (insecure)
-SET GLOBAL secure_file_priv = '';
