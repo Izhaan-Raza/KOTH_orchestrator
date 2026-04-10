@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Jenkins requires Java
+# Jenkins requires Java 11 (works for 2.235.1)
 RUN apt-get update && apt-get install -y \
     openjdk-11-jdk \
     wget \
@@ -11,31 +11,34 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Jenkins LTS (old version with no security by default)
+# Install Jenkins LTS
 RUN wget -q -O /tmp/jenkins.war https://updates.jenkins.io/download/war/2.235.1/jenkins.war
 
-# King file
-RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.txt && chmod 777 /root
+# King file - LOCKED DOWN (Requires root/sudo to write)
+RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && \
+    chmod 600 /root/king.txt && \
+    chmod 700 /root
 
-# Create a low-priv user that Jenkins runs as
+# Create jenkins user
 RUN useradd -m -s /bin/bash jenkins && echo 'jenkins:jenkins' | chpasswd
 
-# PrivEsc: sudo python3 with no password for jenkins user
+# The Intended PrivEsc Vector: sudo python3
 RUN echo "jenkins ALL=(ALL) NOPASSWD: /usr/bin/python3" >> /etc/sudoers
 
-# Jenkins with no authentication (JAVA_OPTS disable security)
+# Jenkins Setup
 ENV JENKINS_HOME=/var/jenkins_home
-RUN mkdir -p /var/jenkins_home && chown jenkins:jenkins /var/jenkins_home
+RUN mkdir -p /var/jenkins_home/init.groovy.d && \
+    chown -R jenkins:jenkins /var/jenkins_home
 
-# Disable Jenkins setup wizard and security
-RUN mkdir -p /var/jenkins_home/init.groovy.d
+# Disable Jenkins security via init script
 COPY disable-security.groovy /var/jenkins_home/init.groovy.d/disable-security.groovy
-RUN chown -R jenkins:jenkins /var/jenkins_home
+RUN chown jenkins:jenkins /var/jenkins_home/init.groovy.d/disable-security.groovy
 
 EXPOSE 8080
 
-CMD ["/bin/bash", "-c", \
-    "su - jenkins -c 'java -DJENKINS_HOME=/var/jenkins_home \
-    -Djenkins.install.runSetupWizard=false \
-    -Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.DISABLE_CSRF_PROTECTION=true \
-    -jar /tmp/jenkins.war --httpPort=8080'"]
+# Run as jenkins user
+USER jenkins
+ENTRYPOINT ["java", \
+    "-Djenkins.install.runSetupWizard=false", \
+    "-Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.DISABLE_CSRF_PROTECTION=true", \
+    "-jar", "/tmp/jenkins.war", "--httpPort=8080"]
