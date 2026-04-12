@@ -1,0 +1,52 @@
+version: '3.8'
+
+# ================================================================
+# KoTH Series H3 Orchestrator
+# ================================================================
+# Hour 3 machines:
+#   machineH3A - SMB anonymous share leaks SSH key  (Samba + SSH)
+#                PrivEsc: lxd group container escape
+#                Ports: 445 (SMB), 22 (SSH)
+#
+#   machineH3B - Drupal 7.57 Drupalgeddon2          (Apache + PHP + MySQL)
+#                PrivEsc: writable /opt/backups with cron tar wildcard
+#                Ports: 80 (HTTP)
+#
+#   machineH3C - Exposed .git directory leaks creds (Apache + PHP)
+#                PrivEsc: perl cap_setuid capability
+#                Ports: 80 (HTTP)
+# ================================================================
+
+services:
+
+  machineH3A:
+    build:
+      context: ./machineH3A
+    container_name: koth_h3a
+    image: machineh3a
+    ports:
+      - "10020:445"   # Samba SMB
+      - "10021:22"    # SSH
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN     # Required for lxd group PrivEsc simulation
+
+  machineH3B:
+    build:
+      context: ./machineH3B
+    container_name: koth_h3b
+    image: machineh3b
+    ports:
+      - "10022:80"    # Apache / Drupal 7.57 (Drupalgeddon2)
+    restart: unless-stopped
+
+  machineH3C:
+    build:
+      context: ./machineH3C
+    container_name: koth_h3c
+    image: machineh3c
+    ports:
+      - "10023:80"    # Apache / PHP app with exposed .git
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN     # Required for setcap on perl

@@ -66,7 +66,7 @@ services:
   # HOUR 3
   # ============================================================
   machineH3A:
-    build: ./machineH3A
+    build: ./Series H3/machineH3A
     container_name: machineH3A
     image: machineh3a
     ports:
@@ -77,7 +77,7 @@ services:
       - SYS_ADMIN
 
   machineH3B:
-    build: ./machineH3B
+    build: ./Series H3/machineH3B
     container_name: machineH3B
     image: machineh3b
     ports:
@@ -85,7 +85,7 @@ services:
     restart: unless-stopped
 
   machineH3C:
-    build: ./machineH3C
+    build: ./Series H3/machineH3C
     container_name: machineH3C
     image: machineh3c
     ports:

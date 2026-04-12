@@ -1,0 +1,47 @@
+version: '3.8'
+
+# ================================================================
+# KoTH Series H4 Orchestrator
+# ================================================================
+# Hour 4 machines:
+#   machineH4A - Node.js app with readable /var/backups/shadow.bak
+#                PrivEsc: shadow.bak contains root password (r00tme)
+#                Ports: 3000 (Node.js)
+#
+#   machineH4B - Spring4Shell demo (CVE-2022-22965)
+#                PrivEsc: root password leaked in /root/.bash_history
+#                Ports: 8080 (HTTP)
+#
+#   machineH4C - PHP SSRF → internal Node.js API running as root
+#                PrivEsc: SSRF to 127.0.0.1:1337 executes OS commands
+#                Ports: 80 (HTTP)
+# ================================================================
+
+services:
+
+  machineH4A:
+    build:
+      context: ./machineH4A
+    container_name: koth_h4a
+    image: machineh4a
+    ports:
+      - "10030:3000"  # Node.js vulnerable app
+    restart: unless-stopped
+
+  machineH4B:
+    build:
+      context: ./machineH4B
+    container_name: koth_h4b
+    image: machineh4b
+    ports:
+      - "10031:8080"  # Spring4Shell (CVE-2022-22965)
+    restart: unless-stopped
+
+  machineH4C:
+    build:
+      context: ./machineH4C
+    container_name: koth_h4c
+    image: machineh4c
+    ports:
+      - "10032:80"    # SSRF → internal root API
+    restart: unless-stopped
