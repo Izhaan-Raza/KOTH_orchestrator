@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  h2a:
+    build: 
+      context: ./machineH2A
+    container_name: koth_h2a
+    ports:
+      - "10010:8080" # Jenkins web interface
+    restart: unless-stopped
+
+  h2b:
+    build: 
+      context: ./machineH2B
+    container_name: koth_h2b
+    ports:
+      - "10011:80" # PHP Admin Portal
+    restart: unless-stopped
+
+  h2c:
+    build: 
+      context: ./machineH2C
+    container_name: koth_h2c
+    ports:
+      - "10012:8080" # Tomcat Manager
+    restart: unless-stopped

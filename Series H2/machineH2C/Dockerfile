@@ -2,36 +2,33 @@ FROM tomcat:9.0.31-jdk8-openjdk
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install additional tools for PwnKit PrivEsc
+# Install tools for building PwnKit exploit and handling shells
 RUN apt-get update && apt-get install -y \
     gcc \
     make \
-    pkexec \
     policykit-1 \
     sudo \
     wget \
     curl \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# King file
-RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && chmod 666 /root/king.txt && chmod 777 /root
+# Lock down the king file (Strictly Root Only)
+RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && \
+    chmod 600 /root/king.txt && \
+    chmod 700 /root
 
-# Configure Tomcat with default credentials (tomcat:tomcat)
+# Configure Tomcat Credentials
 COPY tomcat-users.xml /usr/local/tomcat/conf/tomcat-users.xml
 COPY context.xml /usr/local/tomcat/webapps/manager/META-INF/context.xml
 COPY context.xml /usr/local/tomcat/webapps/host-manager/META-INF/context.xml
 
-# Deploy a sample WAR (placeholder - teams upload shell via manager)
-RUN echo '<html><body><h1>KoTH App</h1><p>Tomcat is running. Manager at /manager/html</p></body></html>' \
-    > /usr/local/tomcat/webapps/ROOT/index.html
+# Create low-priv user and change ownership of Tomcat directories
+RUN useradd -m -s /bin/bash tomcatuser && \
+    chown -R tomcatuser:tomcatuser /usr/local/tomcat
 
-# PrivEsc: PwnKit (CVE-2021-4034) - pkexec is installed with SUID
-# pkexec comes with SUID bit set by default in policykit-1
-# Verify it's there (Polkit version older than 0.121 is vulnerable)
-RUN ls -la /usr/bin/pkexec
-
-# Create a low-priv user for Tomcat to run as
-RUN useradd -m -s /bin/bash tomcatuser && echo 'tomcatuser:tomcat' | chpasswd
+# IMPORTANT: Run as low-priv user
+USER tomcatuser
 
 EXPOSE 8080
 
