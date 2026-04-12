@@ -3,6 +3,12 @@ FROM tomcat:9.0.31-jdk8-openjdk
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install tools for building PwnKit exploit and handling shells
+# Fix for Debian Buster EOL: Point to the Debian Archive and ignore expired signatures
+RUN echo "deb http://archive.debian.org/debian buster main" > /etc/apt/sources.list && \
+    echo "deb http://archive.debian.org/debian-security buster/updates main" >> /etc/apt/sources.list && \
+    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99-disable-valid-until
+
+# Now run the standard install
 RUN apt-get update && apt-get install -y \
     gcc \
     make \
@@ -12,7 +18,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     python3 \
     && rm -rf /var/lib/apt/lists/*
-
 # Lock down the king file (Strictly Root Only)
 RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && \
     chmod 600 /root/king.txt && \
