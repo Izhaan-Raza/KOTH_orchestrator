@@ -3,8 +3,8 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Spring4Shell needs Java 8 or Java 11 with Spring Framework < 5.3.18
-RUN apt-get update && apt-get install -y \
-    openjdk-11-jdk \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
     wget \
     curl \
     && rm -rf /var/lib/apt/lists/*
