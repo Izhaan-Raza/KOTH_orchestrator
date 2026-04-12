@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y \
 RUN mkdir -p /root && echo "unclaimed" > /root/king.txt && \
     chmod 600 /root/king.txt && \
     chmod 700 /root
-
+RUN cp -r /usr/local/tomcat/webapps.dist/* /usr/local/tomcat/webapps/
 # Configure Tomcat Credentials
 COPY tomcat-users.xml /usr/local/tomcat/conf/tomcat-users.xml
 COPY context.xml /usr/local/tomcat/webapps/manager/META-INF/context.xml
