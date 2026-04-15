@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pydantic>=2
+APScheduler>=3,<4
+paramiko>=3
+httpx
+jinja2
+aiofiles

@@ -36,3 +36,14 @@
 | machineH8C | 10072 | Laravel Debug CVE-2021-3129               | SUID `/bin/bash_suid` (`bash_suid -p`)     |
 
 ---
+
+## Referee Server (V2)
+
+- Implementation directory: `referee-server/`
+- Start command:
+
+```bash
+cd referee-server
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000
+```

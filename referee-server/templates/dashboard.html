@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KOTH Referee</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="bar">
+      <h1>KOTH Referee Dashboard</h1>
+      <div class="actions">
+        <button onclick="post('/api/competition/start')">Start</button>
+        <button onclick="post('/api/competition/stop')">Stop</button>
+        <button onclick="post('/api/pause')">Pause</button>
+        <button onclick="post('/api/resume')">Resume</button>
+        <button onclick="post('/api/rotate')">Rotate</button>
+      </div>
+    </header>
+
+    <section class="panel" id="statusPanel"></section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>Top Teams</h2>
+        <ol id="teamsList"></ol>
+      </article>
+      <article class="panel">
+        <h2>Recent Events</h2>
+        <ul id="eventsList"></ul>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    async function getJson(url) {
+      const res = await fetch(url);
+      return await res.json();
+    }
+
+    async function post(url, body) {
+      await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      await refresh();
+    }
+
+    function renderStatus(status) {
+      const containers = status.containers.map(c =>
+        `<li>${c.machine_host} ${c.container_id} [${c.status}] king=${c.king ?? 'n/a'} mtime=${c.king_mtime_epoch ?? 'n/a'}</li>`
+      ).join('');
+
+      return `
+        <h2>Competition</h2>
+        <p>Status: <strong>${status.competition_status}</strong></p>
+        <p>Series: <strong>H${status.current_series}</strong></p>
+        <p>Next rotation (s): <strong>${status.next_rotation_seconds ?? 'n/a'}</strong></p>
+        <p>Active teams: <strong>${status.active_teams}</strong></p>
+        <ul>${containers}</ul>
+      `;
+    }
+
+    async function refresh() {
+      const [status, teams, events] = await Promise.all([
+        getJson('/api/status'),
+        getJson('/api/teams'),
+        getJson('/api/events?limit=25'),
+      ]);
+
+      document.getElementById('statusPanel').innerHTML = renderStatus(status);
+      document.getElementById('teamsList').innerHTML = teams
+        .slice(0, 20)
+        .map(t => `<li>${t.name} - ${t.total_points.toFixed(1)} (${t.status})</li>`)
+        .join('');
+
+      document.getElementById('eventsList').innerHTML = events
+        .map(e => `<li>${e.timestamp} ${e.type} ${e.detail}</li>`)
+        .join('');
+    }
+
+    setInterval(refresh, 5000);
+    refresh();
+  </script>
+</body>
+</html>
