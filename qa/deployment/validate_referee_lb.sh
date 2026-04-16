@@ -4,6 +4,8 @@ set -euo pipefail
 SERIES_ROOT="/opt/KOTH_orchestrator"
 REFEREE_DIR="/opt/KOTH_orchestrator/repo/referee-server"
 API_URL="http://127.0.0.1:8000"
+API_KEY="${API_KEY:-}"
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -19,9 +21,17 @@ while [[ $# -gt 0 ]]; do
       API_URL="$2"
       shift 2
       ;;
+    --api-key)
+      API_KEY="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     *)
       echo "Unknown argument: $1"
-      echo "Usage: $0 [--series-root PATH] [--referee-dir PATH] [--api-url URL]"
+      echo "Usage: $0 [--series-root PATH] [--referee-dir PATH] [--api-url URL] [--api-key KEY] [--dry-run]"
       exit 2
       ;;
   esac
@@ -42,11 +52,31 @@ env_value() {
   printf '%s' "${line#*=}"
 }
 
+run_in_referee_env() {
+  local script="$1"
+  if [[ -f "$REFEREE_DIR/.env" ]]; then
+    (
+      set -a
+      # shellcheck disable=SC1091
+      source "$REFEREE_DIR/.env"
+      set +a
+      cd "$REFEREE_DIR"
+      eval "$script"
+    )
+  else
+    (
+      cd "$REFEREE_DIR"
+      eval "$script"
+    )
+  fi
+}
+
 echo "== Referee + LB Validation =="
 echo "Host: $(hostname)"
 echo "Series root: $SERIES_ROOT"
 echo "Referee dir: $REFEREE_DIR"
 echo "API URL: $API_URL"
+echo "Dry run: $DRY_RUN"
 echo
 
 for cmd in python3 curl jq grep awk ssh haproxy; do
@@ -134,7 +164,13 @@ if [[ -f "$REFEREE_DIR/.env" ]]; then
 fi
 
 if [[ -f "$REFEREE_DIR/setup_cli.py" ]]; then
-  if (cd "$REFEREE_DIR" && ./.venv/bin/python setup_cli.py --series 1 >/tmp/ref_setup_cli.out 2>/tmp/ref_setup_cli.err); then
+  if run_in_referee_env "./.venv/bin/python -c 'from config import SETTINGS; SETTINGS.validate_runtime()' >/tmp/ref_config_check.out 2>/tmp/ref_config_check.err"; then
+    pass "referee runtime configuration validates"
+  else
+    fail "referee runtime configuration invalid (see /tmp/ref_config_check.err)"
+  fi
+
+  if run_in_referee_env "./.venv/bin/python setup_cli.py --series 1 >/tmp/ref_setup_cli.out 2>/tmp/ref_setup_cli.err"; then
     pass "setup_cli.py --series 1 succeeded"
   else
     fail "setup_cli.py --series 1 failed (see /tmp/ref_setup_cli.err)"
@@ -163,6 +199,44 @@ else
     fail "koth-referee service inactive and API unavailable"
   fi
   fail "referee API status endpoint not healthy (HTTP $http_code)"
+fi
+
+runtime_code="$(curl -s -o /tmp/ref_runtime.json -w '%{http_code}' "$API_URL/api/runtime" || true)"
+if [[ "$runtime_code" == "200" ]]; then
+  pass "referee API runtime endpoint reachable"
+  if jq -e '.competition_status and .current_series != null and .active_jobs' /tmp/ref_runtime.json >/dev/null 2>&1; then
+    pass "referee API runtime payload shape valid"
+  else
+    fail "referee API runtime payload malformed"
+  fi
+else
+  fail "referee API runtime endpoint not healthy (HTTP $runtime_code)"
+fi
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  if [[ -z "$API_KEY" ]]; then
+    fail "dry run requested but --api-key was not provided"
+  else
+    auth_header=(-H "X-API-Key: $API_KEY")
+    current_runtime="$(curl -sS "$API_URL/api/runtime" || true)"
+    current_status="$(printf '%s' "$current_runtime" | jq -r '.competition_status // empty' 2>/dev/null || true)"
+    if [[ "$current_status" == "running" ]]; then
+      fail "dry run refused because the runtime is currently running; this validation must not mutate a live event"
+    fi
+
+    if curl -sS -X POST "${auth_header[@]}" "$API_URL/api/recover/validate" | jq -e '.valid != null' >/dev/null 2>&1; then
+      pass "recovery validation endpoint reachable with admin key"
+    else
+      fail "recovery validation endpoint failed"
+    fi
+
+    runtime_after_validate="$(curl -sS "$API_URL/api/runtime" || true)"
+    if printf '%s' "$runtime_after_validate" | jq -e '.competition_status == "paused" or .competition_status == "faulted" or .competition_status == "stopped"' >/dev/null 2>&1; then
+      pass "runtime remains in a non-running state during non-destructive dry run"
+    else
+      fail "runtime entered an unexpected state during dry run"
+    fi
+  fi
 fi
 
 echo

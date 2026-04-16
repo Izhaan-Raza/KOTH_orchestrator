@@ -74,20 +74,43 @@ for s in 1 2 3 4 5 6 7 8; do
     continue
   fi
 
-  if grep -q "machineH${s}A" "$compose" && grep -q "machineH${s}B" "$compose" && grep -q "machineH${s}C" "$compose"; then
-    pass "compose naming looks correct for H$s (A/B/C)"
+  if (
+    cd "$SERIES_ROOT/h$s" &&
+    services="$(docker-compose config --services 2>/dev/null)" &&
+    printf '%s\n' "$services" | grep -qx "machineH${s}A" &&
+    printf '%s\n' "$services" | grep -qx "machineH${s}B" &&
+    printf '%s\n' "$services" | grep -qx "machineH${s}C"
+  ); then
+    pass "compose services resolve correctly for H$s (A/B/C)"
   else
-    fail "compose naming mismatch for H$s (missing machineH${s}{A,B,C})"
+    fail "compose services invalid for H$s (missing machineH${s}{A,B,C})"
   fi
 done
 
 if [[ -n "$ACTIVE_SERIES" ]]; then
   for v in A B C; do
-    c="machineH${ACTIVE_SERIES}${v}"
-    if docker ps --format '{{.Names}}' | grep -qx "$c"; then
-      pass "active container running: $c"
+    service="machineH${ACTIVE_SERIES}${v}"
+    if (
+      cd "$SERIES_ROOT/h$ACTIVE_SERIES" &&
+      cid="$(docker-compose ps -q "$service" 2>/dev/null | head -n 1)" &&
+      [[ -n "$cid" ]] &&
+      docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null | grep -qx "true"
+    ); then
+      pass "active service running: $service"
     else
-      fail "active container not running: $c"
+      fail "active service not running: $service"
+    fi
+
+    if (
+      cd "$SERIES_ROOT/h$ACTIVE_SERIES" &&
+      cid="$(docker-compose ps -q "$service" 2>/dev/null | head -n 1)" &&
+      [[ -n "$cid" ]] &&
+      king_value="$(docker exec "$cid" sh -lc 'cat /root/king.txt 2>/dev/null || true')" &&
+      [[ -n "$king_value" ]]
+    ); then
+      pass "active service king.txt present: $service"
+    else
+      fail "active service king.txt missing or unreadable: $service"
     fi
   done
 fi

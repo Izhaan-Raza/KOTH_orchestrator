@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import importlib
+import os
+import tempfile
 import types
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from fastapi.testclient import TestClient
 from pathlib import Path
 import sys
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 if "paramiko" not in sys.modules:
@@ -17,8 +21,76 @@ if "paramiko" not in sys.modules:
     sys.modules["paramiko"] = fake_paramiko
 
 from poller import VariantSnapshot
-from scheduler import RefereeRuntime
+from poller import Poller
+from scheduler import RefereeRuntime, RuntimeGuardError
 from scorer import resolve_earliest_winners
+from db import Database
+from config import SETTINGS
+
+
+class DummySSH:
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, str]] = []
+
+    def exec(self, host: str, command: str):
+        self.commands.append((host, command))
+        return 0, "OK", ""
+
+    def close(self) -> None:
+        return
+
+
+class DummyScheduler:
+    def __init__(self):
+        self.jobs: dict[str, dict[str, object]] = {}
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def shutdown(self, wait: bool = False) -> None:
+        _ = wait
+        self.jobs.clear()
+
+    def get_job(self, job_id: str):
+        return self.jobs.get(job_id)
+
+    def get_jobs(self):
+        return [types.SimpleNamespace(id=job_id) for job_id in sorted(self.jobs)]
+
+    def add_job(self, func, trigger, id, replace_existing, max_instances, **kwargs) -> None:
+        _ = func, replace_existing, max_instances
+        self.jobs[id] = {"trigger": trigger, **kwargs}
+
+    def remove_job(self, job_id: str) -> None:
+        self.jobs.pop(job_id, None)
+
+
+class DummyTemplates:
+    def __init__(self, *args, **kwargs) -> None:
+        _ = args, kwargs
+
+    def TemplateResponse(self, *args, **kwargs):
+        _ = args, kwargs
+        return None
+
+
+def _override_runtime_settings(testcase: unittest.TestCase) -> None:
+    overrides = {
+        "node_hosts": ("10.0.0.11", "10.0.0.12", "10.0.0.13"),
+        "node_priority": ("10.0.0.11", "10.0.0.12", "10.0.0.13"),
+        "variants": ("A", "B", "C"),
+        "min_healthy_nodes": 2,
+    }
+    originals = {name: getattr(SETTINGS, name) for name in overrides}
+    for name, value in overrides.items():
+        object.__setattr__(SETTINGS, name, value)
+
+    def restore() -> None:
+        for name, value in originals.items():
+            object.__setattr__(SETTINGS, name, value)
+
+    testcase.addCleanup(restore)
 
 
 def _snapshot(
@@ -45,25 +117,54 @@ def _snapshot(
 
 
 class ScoringAndDriftTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _override_runtime_settings(self)
+
     def test_resolve_winner_excludes_degraded_and_uses_node_priority_tie_break(self) -> None:
         snapshots = [
-            _snapshot(node_host="10.0.0.13", king="Team C", king_mtime_epoch=900, status="degraded"),
+            _snapshot(node_host="10.0.0.13", king="Team A", king_mtime_epoch=900, status="degraded"),
             _snapshot(node_host="10.0.0.11", king="Team A", king_mtime_epoch=1000, status="running"),
-            _snapshot(node_host="10.0.0.12", king="Team B", king_mtime_epoch=1000, status="running"),
+            _snapshot(node_host="10.0.0.12", king="Team A", king_mtime_epoch=1000, status="running"),
         ]
 
         winners = resolve_earliest_winners(snapshots)
         self.assertEqual(winners["A"].team_name, "Team A")
         self.assertEqual(winners["A"].node_host, "10.0.0.11")
+        self.assertEqual(winners["A"].supporting_nodes, 2)
 
     def test_resolve_winner_skips_malformed_claims(self) -> None:
         snapshots = [
             _snapshot(node_host="10.0.0.11", king="Bad\x01Team", king_mtime_epoch=900),
             _snapshot(node_host="10.0.0.12", king="Good Team", king_mtime_epoch=950),
+            _snapshot(node_host="10.0.0.13", king="Good Team", king_mtime_epoch=960),
         ]
 
         winners = resolve_earliest_winners(snapshots)
         self.assertEqual(winners["A"].team_name, "Good Team")
+
+    def test_resolve_winner_requires_quorum_for_new_owner(self) -> None:
+        snapshots = [
+            _snapshot(node_host="10.0.0.11", king="Team Alpha", king_mtime_epoch=900),
+            _snapshot(node_host="10.0.0.12", king="Team Beta", king_mtime_epoch=850),
+            _snapshot(node_host="10.0.0.13", king="unclaimed", king_mtime_epoch=1000),
+        ]
+
+        winners = resolve_earliest_winners(snapshots)
+        self.assertEqual(winners, {})
+
+    def test_existing_authoritative_owner_wins_when_it_keeps_quorum(self) -> None:
+        snapshots = [
+            _snapshot(node_host="10.0.0.11", king="Team Alpha", king_mtime_epoch=1000),
+            _snapshot(node_host="10.0.0.12", king="Team Alpha", king_mtime_epoch=1010),
+            _snapshot(node_host="10.0.0.13", king="Team Beta", king_mtime_epoch=900),
+        ]
+
+        winners = resolve_earliest_winners(
+            snapshots,
+            current_owners={"A": {"owner_team": "Team Alpha"}},
+        )
+        self.assertEqual(winners["A"].team_name, "Team Alpha")
+        self.assertEqual(winners["A"].supporting_nodes, 2)
 
     def test_mark_clock_drift_degraded(self) -> None:
         runtime = object.__new__(RefereeRuntime)
@@ -79,6 +180,699 @@ class ScoringAndDriftTests(unittest.TestCase):
         self.assertEqual(degraded, {"10.0.0.13"})
         self.assertEqual(snapshots[2].status, "degraded")
         runtime._log_event_and_webhook.assert_called_once()
+
+
+class RuntimeSafetyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _override_runtime_settings(self)
+
+    def make_runtime(self) -> tuple[RefereeRuntime, Database]:
+        fd, raw_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db_path = Path(raw_path)
+
+        db = Database(db_path)
+        db.initialize()
+        self.addCleanup(lambda: db_path.exists() and db_path.unlink())
+        self.addCleanup(db.close)
+        runtime = RefereeRuntime(db, DummySSH())
+        return runtime, db
+
+    def test_start_competition_requires_team_roster(self) -> None:
+        runtime, db = self.make_runtime()
+        runtime._run_compose_parallel = Mock(return_value={})
+        runtime.poller.run_cycle = Mock(return_value=([], {}))
+
+        with self.assertRaises(RuntimeGuardError):
+            runtime.start_competition()
+
+        self.assertEqual(db.get_competition()["status"], "stopped")
+        self.assertEqual(db.team_count(), 0)
+
+    def test_start_competition_with_existing_teams_enters_running(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        runtime._run_compose_parallel = Mock(return_value={})
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+                ],
+                {},
+            )
+        )
+
+        runtime.start_competition()
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["current_series"], 1)
+
+    def test_start_competition_rolls_back_failed_deploy(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+
+        def compose(series: int, command: str):
+            if "up -d" in command:
+                return {"10.0.0.11": (False, "boom")}
+            if "down -v" in command:
+                return {"10.0.0.11": (True, "rolled back")}
+            return {}
+
+        runtime._run_compose_parallel = Mock(side_effect=compose)
+        runtime.poller.run_cycle = Mock(return_value=([], {}))
+
+        with self.assertRaises(RuntimeGuardError):
+            runtime.start_competition()
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "stopped")
+        self.assertTrue(
+            any(
+                event["detail"] == "Competition startup failed; referee left in stopped state"
+                for event in db.list_events(limit=20)
+            )
+        )
+
+    def test_rotate_to_series_pauses_on_failed_health_gate(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.set_competition_state(status="running", current_series=1)
+        runtime.poll_once = Mock()
+        runtime._run_compose_parallel = Mock(
+            side_effect=[
+                {},
+                {
+                    "10.0.0.11": (False, "boom"),
+                    "10.0.0.12": (False, "boom"),
+                    "10.0.0.13": (False, "boom"),
+                },
+                {},
+                {
+                    "10.0.0.11": (False, "still-broken"),
+                    "10.0.0.12": (False, "still-broken"),
+                    "10.0.0.13": (False, "still-broken"),
+                },
+                {},
+            ]
+        )
+        runtime.poller.run_cycle = Mock(side_effect=[([], {}), ([], {})])
+
+        with self.assertRaises(RuntimeGuardError):
+            runtime.rotate_to_series(2)
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "faulted")
+        self.assertEqual(state["current_series"], 1)
+        self.assertIn("rollback to H1 also failed", state["fault_reason"])
+
+    def test_rotate_to_series_rolls_back_previous_series_after_failed_target_deploy(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.increment_team_offense("Team Alpha")
+        db.increment_team_offense("Team Alpha")
+        db.set_competition_state(status="running", current_series=1)
+        runtime.poll_once = Mock()
+        runtime._run_compose_parallel = Mock(
+            side_effect=[
+                {},
+                {
+                    "10.0.0.11": (False, "boom"),
+                    "10.0.0.12": (False, "boom"),
+                    "10.0.0.13": (False, "boom"),
+                },
+                {},
+                {},
+            ]
+        )
+        healthy_snapshots = [
+            _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+        ]
+        runtime.poller.run_cycle = Mock(side_effect=[([], {}), (healthy_snapshots, {})])
+
+        runtime.rotate_to_series(2)
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["current_series"], 1)
+        self.assertTrue(state["next_rotation"])
+        self.assertEqual(db.get_team("Team Alpha")["status"], "series_banned")
+        self.assertTrue(
+            any(
+                event["detail"] == "Rotation to H2 failed; automatically rolled back to H1"
+                for event in db.list_events(limit=20)
+            )
+        )
+
+    def test_degraded_node_does_not_block_rotation_when_quorum_holds(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.set_competition_state(status="running", current_series=1)
+        runtime.poll_once = Mock()
+        runtime._run_compose_parallel = Mock(side_effect=[{}, {}, {}])
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed", node_epoch=1000),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed", node_epoch=1000),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed", node_epoch=1000),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed", node_epoch=1010),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed", node_epoch=1010),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed", node_epoch=1010),
+                ],
+                {},
+            )
+        )
+
+        runtime.rotate_to_series(2)
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "running")
+        self.assertEqual(state["current_series"], 2)
+
+    def test_baseline_violation_detects_missing_to_present_authkeys(self) -> None:
+        runtime, db = self.make_runtime()
+        runtime._capture_baselines(
+            1,
+            [
+                VariantSnapshot(
+                    node_host="10.0.0.11",
+                    variant="A",
+                    king="unclaimed",
+                    king_mtime_epoch=1,
+                    status="running",
+                    sections={"AUTHKEYS": "", "SHADOW": "", "IPTABLES": "ok", "PORTS": "ok"},
+                    checked_at=datetime.now(UTC),
+                )
+            ],
+        )
+
+        violations: dict[tuple[str, str], list[object]] = {}
+        runtime._merge_baseline_violations(
+            series=1,
+            snapshots=[
+                VariantSnapshot(
+                    node_host="10.0.0.11",
+                    variant="A",
+                    king="Team Alpha",
+                    king_mtime_epoch=2,
+                    status="running",
+                    sections={
+                        "AUTHKEYS": f"{'a' * 64}  /root/.ssh/authorized_keys",
+                        "SHADOW": "",
+                        "IPTABLES": "ok",
+                        "PORTS": "ok",
+                    },
+                    checked_at=datetime.now(UTC),
+                )
+            ],
+            violations=violations,
+        )
+
+        hits = violations[("10.0.0.11", "A")]
+        self.assertEqual(hits[0].offense_name, "credential_material_changed")
+
+    def test_pause_blocks_scoring(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.set_competition_state(status="paused", current_series=1)
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [_snapshot(node_host="10.0.0.11", king="Team Alpha", king_mtime_epoch=1)],
+                {},
+            )
+        )
+
+        runtime.poll_once()
+
+        self.assertEqual(db.get_team("Team Alpha")["total_points"], 0)
+        self.assertEqual(db.get_competition()["poll_cycle"], 0)
+
+    def test_quorum_loss_blocks_scoring(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.set_competition_state(status="running", current_series=1)
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="Team Alpha", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="A", king=None, king_mtime_epoch=None, status="unreachable"),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="A", king=None, king_mtime_epoch=None, status="unreachable"),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed", king_mtime_epoch=1),
+                ],
+                {},
+            )
+        )
+
+        runtime.poll_once()
+
+        self.assertEqual(db.get_team("Team Alpha")["total_points"], 0)
+        self.assertTrue(
+            any(
+                "insufficient healthy replicas" in event["detail"]
+                for event in db.list_events(limit=20)
+            )
+        )
+
+    def test_single_node_earliest_claim_does_not_override_authoritative_owner(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha", "Team Beta"])
+        db.set_competition_state(status="running", current_series=1)
+        db.set_variant_owner(
+            series=1,
+            variant="A",
+            owner_team="Team Alpha",
+            accepted_mtime_epoch=1000,
+            source_node_host="10.0.0.11",
+            evidence={"source": "test"},
+        )
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="Team Alpha", king_mtime_epoch=1000),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="Team Alpha", king_mtime_epoch=1010),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="Team Beta", king_mtime_epoch=900),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed", king_mtime_epoch=1),
+                ],
+                {},
+            )
+        )
+
+        runtime.poll_once()
+
+        self.assertEqual(db.get_team("Team Alpha")["total_points"], 1.0)
+        self.assertEqual(db.get_team("Team Beta")["total_points"], 0.0)
+        owner = db.get_variant_owner(series=1, variant="A")
+        self.assertEqual(owner["owner_team"], "Team Alpha")
+
+    def test_authoritative_owner_is_reconciled_to_divergent_healthy_replica(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha", "Team Beta"])
+        db.set_competition_state(status="running", current_series=1)
+        db.set_variant_owner(
+            series=1,
+            variant="A",
+            owner_team="Team Alpha",
+            accepted_mtime_epoch=1000,
+            source_node_host="10.0.0.11",
+            evidence={"source": "test"},
+        )
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="Team Alpha", king_mtime_epoch=1000),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="Team Alpha", king_mtime_epoch=1010),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="Team Beta", king_mtime_epoch=900),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed", king_mtime_epoch=1),
+                ],
+                {},
+            )
+        )
+
+        runtime.poll_once()
+
+        ssh = runtime.ssh_pool
+        self.assertEqual(len(ssh.commands), 1)
+        host, command = ssh.commands[0]
+        self.assertEqual(host, "10.0.0.13")
+        self.assertIn("Team Alpha", command)
+        self.assertTrue(
+            any(
+                event["detail"] == "Reconciled A replica to authoritative owner"
+                for event in db.list_events(limit=20)
+            )
+        )
+
+    def test_resume_requires_validated_current_series(self) -> None:
+        runtime, db = self.make_runtime()
+        db.upsert_team_names(["Team Alpha"])
+        db.set_competition_state(status="paused", current_series=1)
+        runtime.poller.run_cycle = Mock(return_value=([], {}))
+
+        with self.assertRaises(RuntimeGuardError):
+            runtime.resume_rotation()
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "faulted")
+        self.assertIn("failed resume validation", state["fault_reason"])
+
+    def test_start_scheduler_restores_rotation_job_from_db(self) -> None:
+        runtime, db = self.make_runtime()
+        future_rotation = datetime.now(UTC) + timedelta(minutes=5)
+        db.set_competition_state(status="running", current_series=1, next_rotation=future_rotation.isoformat())
+        runtime.scheduler = DummyScheduler()
+
+        runtime.start_scheduler()
+
+        self.assertIn("poll", runtime.scheduler.jobs)
+        self.assertIn("rotate", runtime.scheduler.jobs)
+        self.assertEqual(runtime.scheduler.jobs["rotate"]["trigger"], "date")
+        self.assertEqual(runtime.scheduler.jobs["rotate"]["run_date"], future_rotation)
+
+    def test_runtime_endpoint_model_fields_persist_validation_state(self) -> None:
+        runtime, db = self.make_runtime()
+        validated_at = datetime.now(UTC).isoformat()
+        db.set_competition_state(
+            status="faulted",
+            current_series=2,
+            previous_series=1,
+            fault_reason="rotation failed",
+            last_validated_series=1,
+            last_validated_at=validated_at,
+        )
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "faulted")
+        self.assertEqual(state["previous_series"], 1)
+        self.assertEqual(state["fault_reason"], "rotation failed")
+        self.assertEqual(state["last_validated_series"], 1)
+        self.assertEqual(state["last_validated_at"], validated_at)
+
+    def test_validate_current_series_returns_summary(self) -> None:
+        runtime, db = self.make_runtime()
+        db.set_competition_state(status="paused", current_series=1)
+        runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+                ],
+                {},
+            )
+        )
+
+        summary = runtime.validate_current_series()
+
+        self.assertTrue(summary["valid"])
+        self.assertTrue(summary["complete_snapshot_matrix"])
+        self.assertEqual(summary["healthy_nodes"], 3)
+        self.assertEqual(summary["min_healthy_nodes"], 2)
+        self.assertEqual(summary["healthy_counts_by_variant"]["A"], 3)
+        state = db.get_competition()
+        self.assertEqual(state["last_validated_series"], 1)
+        self.assertIsNotNone(state["last_validated_at"])
+
+    def test_recover_current_series_redeploys_faulted_series_and_leaves_paused(self) -> None:
+        runtime, db = self.make_runtime()
+        db.set_competition_state(status="faulted", current_series=2, fault_reason="broken")
+        runtime._run_compose_parallel = Mock(return_value={})
+        healthy_snapshots = [
+            _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+        ]
+        runtime.poller.run_cycle = Mock(return_value=(healthy_snapshots, {}))
+
+        result = runtime.recover_current_series()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["competition_status"], "paused")
+        state = db.get_competition()
+        self.assertEqual(state["status"], "paused")
+        self.assertEqual(state["current_series"], 2)
+        self.assertIsNone(state["fault_reason"])
+        self.assertEqual(state["last_validated_series"], 2)
+
+    def test_recover_current_series_failure_remains_faulted(self) -> None:
+        runtime, db = self.make_runtime()
+        db.set_competition_state(status="faulted", current_series=2, fault_reason="broken")
+
+        def compose(series: int, command: str):
+            if "up -d" in command:
+                return {"10.0.0.11": (False, "boom")}
+            return {}
+
+        runtime._run_compose_parallel = Mock(side_effect=compose)
+        runtime.poller.run_cycle = Mock(return_value=([], {}))
+
+        with self.assertRaises(RuntimeGuardError):
+            runtime.recover_current_series()
+
+        state = db.get_competition()
+        self.assertEqual(state["status"], "faulted")
+        self.assertIn("Recovery redeploy for H2 failed", state["fault_reason"])
+
+
+class PollerCompletenessTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _override_runtime_settings(self)
+
+    def test_partial_output_synthesizes_missing_variants_as_failed(self) -> None:
+        class PartialSSH:
+            def exec(self, host: str, command: str):
+                _ = command
+                return (
+                    1,
+                    "\n".join(
+                        [
+                            "===VARIANT:A===",
+                            "===KING===",
+                            "Team Alpha",
+                            "===KING_STAT===",
+                            "1000 644 root:root regular file",
+                            "===END_VARIANT===",
+                        ]
+                    ),
+                    "simulated failure",
+                )
+
+        poller = Poller(PartialSSH())
+
+        snapshots, violations = poller.run_cycle(series=1)
+
+        self.assertEqual(len(snapshots), len(SETTINGS.node_hosts) * len(SETTINGS.variants))
+        self.assertEqual({snap.variant for snap in snapshots}, {"A", "B", "C"})
+        self.assertEqual({snap.node_host for snap in snapshots}, set(SETTINGS.node_hosts))
+        self.assertEqual(
+            {snap.variant for snap in snapshots if snap.status == "failed"},
+            {"B", "C"},
+        )
+        self.assertEqual(violations, {})
+
+
+class ConfigLoadingTests(unittest.TestCase):
+    def test_dotenv_is_loaded_from_module_directory(self) -> None:
+        config_path = Path(__file__).resolve().parent.parent / "config.py"
+        env_path = config_path.with_name(".env")
+        original = env_path.read_text(encoding="utf-8") if env_path.exists() else None
+        env_path.write_text("ADMIN_API_KEY=from-dotenv\n", encoding="utf-8")
+        self.addCleanup(
+            lambda: env_path.write_text(original, encoding="utf-8")
+            if original is not None
+            else env_path.exists() and env_path.unlink()
+        )
+
+        with patch.dict(os.environ, {}, clear=True):
+            sys.modules.pop("config", None)
+            config = importlib.import_module("config")
+            importlib.reload(config)
+            self.assertEqual(config.SETTINGS.admin_api_key, "from-dotenv")
+            self.assertFalse(config.SETTINGS.allow_unsafe_no_admin_api_key)
+
+
+class ApiEndpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _override_runtime_settings(self)
+        original_admin_key = SETTINGS.admin_api_key
+        object.__setattr__(SETTINGS, "admin_api_key", "test-admin-key")
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "admin_api_key", original_admin_key))
+
+        fd, raw_path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        db_path = Path(raw_path)
+        self.addCleanup(lambda: db_path.exists() and db_path.unlink())
+
+        db = Database(db_path)
+        db.initialize()
+        self.addCleanup(db.close)
+        runtime = RefereeRuntime(db, DummySSH())
+        runtime.scheduler = DummyScheduler()
+        runtime.start_scheduler = Mock()
+        runtime.shutdown = Mock()
+
+        sys.modules.pop("app", None)
+        with patch("fastapi.templating.Jinja2Templates", DummyTemplates):
+            app_module = importlib.import_module("app")
+        self.app_module = app_module
+        self.original_db = app_module.db
+        self.original_runtime = app_module.runtime
+        self.original_ssh_pool = app_module.ssh_pool
+        app_module.db = db
+        app_module.runtime = runtime
+        app_module.ssh_pool = runtime.ssh_pool
+        self.addCleanup(self._restore_app_globals)
+
+        self.client = TestClient(app_module.app)
+        self.addCleanup(self.client.close)
+
+    def _restore_app_globals(self) -> None:
+        self.app_module.db = self.original_db
+        self.app_module.runtime = self.original_runtime
+        self.app_module.ssh_pool = self.original_ssh_pool
+
+    def test_runtime_endpoint_returns_extended_state(self) -> None:
+        validated_at = datetime.now(UTC).isoformat()
+        self.app_module.db.set_competition_state(
+            status="faulted",
+            current_series=3,
+            previous_series=2,
+            fault_reason="rotation failed",
+            last_validated_series=2,
+            last_validated_at=validated_at,
+        )
+        self.app_module.runtime.scheduler.add_job(
+            lambda: None,
+            "interval",
+            id="poll",
+            replace_existing=True,
+            max_instances=1,
+            seconds=30,
+        )
+        self.app_module.runtime.scheduler.add_job(
+            lambda: None,
+            "date",
+            id="rotate",
+            replace_existing=True,
+            max_instances=1,
+            run_date=datetime.now(UTC) + timedelta(minutes=1),
+        )
+
+        response = self.client.get("/api/runtime")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["competition_status"], "faulted")
+        self.assertEqual(payload["current_series"], 3)
+        self.assertEqual(payload["previous_series"], 2)
+        self.assertEqual(payload["fault_reason"], "rotation failed")
+        self.assertEqual(payload["last_validated_series"], 2)
+        self.assertIn("poll", payload["active_jobs"])
+        self.assertIn("rotate", payload["active_jobs"])
+
+    def test_recover_validate_endpoint_requires_admin_key(self) -> None:
+        response = self.client.post("/api/recover/validate")
+        self.assertEqual(response.status_code, 401)
+
+    def test_recover_validate_endpoint_returns_summary(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        self.app_module.db.set_competition_state(status="paused", current_series=1)
+        self.app_module.runtime.poller.run_cycle = Mock(
+            return_value=(
+                [
+                    _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+                    _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+                ],
+                {},
+            )
+        )
+
+        response = self.client.post(
+            "/api/recover/validate",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["valid"])
+        self.assertTrue(payload["complete_snapshot_matrix"])
+        self.assertEqual(payload["healthy_nodes"], 3)
+        self.assertEqual(payload["min_healthy_nodes"], 2)
+        self.assertEqual(payload["healthy_counts_by_variant"]["A"], 3)
+
+    def test_recover_redeploy_endpoint_returns_paused_recovery_result(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        self.app_module.db.set_competition_state(status="faulted", current_series=2, fault_reason="broken")
+        self.app_module.runtime._run_compose_parallel = Mock(return_value={})
+        healthy_snapshots = [
+            _snapshot(node_host="10.0.0.11", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.11", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.12", variant="C", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="A", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="B", king="unclaimed"),
+            _snapshot(node_host="10.0.0.13", variant="C", king="unclaimed"),
+        ]
+        self.app_module.runtime.poller.run_cycle = Mock(return_value=(healthy_snapshots, {}))
+
+        response = self.client.post(
+            "/api/recover/redeploy",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["competition_status"], "paused")
+        self.assertEqual(payload["current_series"], 2)
+        self.assertIsNone(payload["fault_reason"])
+
+    def test_recover_redeploy_endpoint_surfaces_guard_error(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        self.app_module.db.set_competition_state(status="running", current_series=2)
+
+        response = self.client.post(
+            "/api/recover/redeploy",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("paused or faulted", response.json()["detail"])
 
 
 if __name__ == "__main__":

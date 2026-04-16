@@ -13,6 +13,7 @@ from ssh_client import SSHClientPool
 
 VARIANT_START = re.compile(r"^===VARIANT:([A-Z])===$")
 SECTION_LINE = re.compile(r"^===([A-Z_]+)===$")
+MISSING_HASH = "__MISSING__"
 
 
 @dataclass
@@ -38,9 +39,10 @@ class Poller:
         self._ssh = ssh_pool
 
     def _build_probe_command(self, series: int) -> str:
+        series_dir = shlex.quote(f"{SETTINGS.remote_series_root}/h{series}")
         variant_fragments: list[str] = []
         for variant in SETTINGS.variants:
-            container = shlex.quote(
+            service = shlex.quote(
                 SETTINGS.container_name_template.format(
                     series=series,
                     variant=variant,
@@ -48,8 +50,15 @@ class Poller:
                 )
             )
             fragment = f"""
+cd {series_dir} || exit 1;
 echo "===VARIANT:{variant}===";
-docker exec {container} sh -lc '
+container_id="$(docker-compose ps -q {service} 2>/dev/null | head -n 1)";
+if [ -z "$container_id" ]; then
+  echo "===ERROR===";
+  echo "CONTAINER_NOT_FOUND";
+  echo "===END_VARIANT===";
+else
+docker exec "$container_id" sh -lc '
   echo "===NODE_EPOCH===";
   date +%s 2>/dev/null || echo "EPOCH_FAIL";
   echo "===KING===";
@@ -74,6 +83,7 @@ docker exec {container} sh -lc '
   sha256sum /root/.ssh/authorized_keys 2>/dev/null;
 ' 2>/tmp/referee_probe.err || cat /tmp/referee_probe.err;
 echo "===END_VARIANT===";
+fi;
 """
             variant_fragments.append(fragment)
         return "\n".join(variant_fragments)
@@ -117,6 +127,8 @@ echo "===END_VARIANT===";
             status = "running"
             if not flat_sections:
                 status = "failed"
+            elif "CONTAINER_NOT_FOUND" in flat_sections.get("ERROR", ""):
+                status = "failed"
             elif king is None and "FILE_MISSING" in flat_sections.get("KING", ""):
                 status = "failed"
 
@@ -133,6 +145,50 @@ echo "===END_VARIANT===";
             )
 
         return snapshots
+
+    @staticmethod
+    def _failed_snapshot(
+        *,
+        node_host: str,
+        variant: str,
+        checked_at: datetime,
+        status: str,
+        sections: dict[str, str],
+    ) -> VariantSnapshot:
+        return VariantSnapshot(
+            node_host=node_host,
+            variant=variant,
+            king=None,
+            king_mtime_epoch=None,
+            status=status,
+            sections=sections,
+            checked_at=checked_at,
+        )
+
+    def _fill_missing_variants(
+        self,
+        *,
+        host: str,
+        parsed: list[VariantSnapshot],
+        checked_at: datetime,
+        status: str,
+        sections: dict[str, str],
+    ) -> list[VariantSnapshot]:
+        by_variant = {snap.variant: snap for snap in parsed}
+        filled = list(parsed)
+        for variant in SETTINGS.variants:
+            if variant in by_variant:
+                continue
+            filled.append(
+                self._failed_snapshot(
+                    node_host=host,
+                    variant=variant,
+                    checked_at=checked_at,
+                    status=status,
+                    sections=sections,
+                )
+            )
+        return filled
 
     @staticmethod
     def _normalize_king(raw: str) -> str | None:
@@ -216,6 +272,11 @@ echo "===END_VARIANT===";
             return token.lower()
         return None
 
+    @classmethod
+    def extract_sha256_or_missing(cls, raw: str) -> str:
+        digest = cls.extract_sha256(raw)
+        return digest if digest is not None else MISSING_HASH
+
     @staticmethod
     def stable_signature(raw: str) -> str | None:
         if not raw:
@@ -265,18 +326,23 @@ echo "===END_VARIANT===";
                         snap_time = datetime.now(UTC)
                         for variant in SETTINGS.variants:
                             snapshots.append(
-                                VariantSnapshot(
+                                self._failed_snapshot(
                                     node_host=host,
                                     variant=variant,
-                                    king=None,
-                                    king_mtime_epoch=None,
+                                    checked_at=snap_time,
                                     status="failed",
                                     sections={"ERROR": err.strip(), "RAW": out[:500]},
-                                    checked_at=snap_time,
                                 )
                             )
                         continue
 
+                    parsed = self._fill_missing_variants(
+                        host=host,
+                        parsed=parsed,
+                        checked_at=datetime.now(UTC),
+                        status="failed",
+                        sections={"ERROR": err.strip(), "RAW": out[:500]},
+                    )
                     for snap in parsed:
                         snapshots.append(snap)
                         hits = self._detect_violations(snap)

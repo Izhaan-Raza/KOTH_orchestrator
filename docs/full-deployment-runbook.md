@@ -236,6 +236,7 @@ CONTAINER_NAME_TEMPLATE=machineH{series}{variant}
 BACKEND_URL=
 WEBHOOK_URL=
 ADMIN_API_KEY=replace-with-long-random-value
+MIN_HEALTHY_NODES=2
 ```
 
 If using `$HOME` layout, set:
@@ -320,6 +321,12 @@ Manual run:
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+Notes:
+
+1. `referee-server` auto-loads `./.env`, so manual `uvicorn` and `setup_cli.py` use the same configuration as systemd.
+2. Startup fails if `ADMIN_API_KEY` is empty unless `ALLOW_UNSAFE_NO_ADMIN_API_KEY=true`.
+3. Startup also fails if no teams exist locally and `BACKEND_URL` does not provide `/teams`.
+
 Or systemd service:
 
 ```ini
@@ -371,10 +378,10 @@ Start:
 curl -sS -X POST "$REFEREE_URL/api/competition/start" -H "X-API-Key: $API_KEY"
 ```
 
-Status:
+Runtime status:
 
 ```bash
-curl -sS "$REFEREE_URL/api/status" | jq .
+curl -sS "$REFEREE_URL/api/runtime" | jq .
 ```
 
 Rotate:
@@ -390,6 +397,19 @@ curl -sS -X POST "$REFEREE_URL/api/pause" -H "X-API-Key: $API_KEY"
 curl -sS -X POST "$REFEREE_URL/api/resume" -H "X-API-Key: $API_KEY"
 ```
 
+Validate / Recover faulted or paused series:
+
+```bash
+curl -sS -X POST "$REFEREE_URL/api/recover/validate" -H "X-API-Key: $API_KEY" | jq .
+curl -sS -X POST "$REFEREE_URL/api/recover/redeploy" -H "X-API-Key: $API_KEY" | jq .
+```
+
+Lifecycle guidance:
+
+1. `paused` means the current series is still expected to be valid, but scoring and rotation are halted.
+2. `faulted` means the runtime detected an unsafe series state or failed recovery path. Do not use `resume` until validation or redeploy succeeds.
+3. Use `/api/runtime` for operator truth. It exposes `competition_status`, `previous_series`, `fault_reason`, `last_validated_series`, and active jobs.
+
 Stop:
 
 ```bash
@@ -403,5 +423,5 @@ curl -sS -X POST "$REFEREE_URL/api/competition/stop" -H "X-API-Key: $API_KEY"
 3. Validate `node3` using `validate_koth_node.sh`
 4. Validate `referee` using `validate_referee_lb.sh`
 5. Start competition
-6. Confirm status/events
+6. Confirm `/api/runtime` reports `running` and no `fault_reason`
 7. Begin live traffic

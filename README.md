@@ -2,9 +2,10 @@
 
 ## Operational Model
 
-- `docker-compose.yml` at the repo root is the authoritative competition runtime. `rotate.sh` targets the master service names `machineH{N}{A|B|C}`.
-- `Series HN/docker-compose.yml` files are for isolated per-hour build/debug workflows. They use the same service names and image tags as the master stack so there is a single naming model across the repo.
-- Do not run a per-series compose stack at the same time as the master stack for the same hour. They intentionally publish the same external competition ports.
+- Production runtime is the distributed referee-managed model under `referee-server/` plus node-local `h1..h8` directories on `node1/node2/node3`.
+- `Series HN/docker-compose.yml` files are the per-series deploy artifacts copied into node-local `hN/` directories and validated by the referee before a series becomes active.
+- Root-level `docker-compose.yml` and `rotate.sh` are local/dev-only artifacts and must not be treated as the production control plane.
+- Operators should use `/api/runtime`, `/api/recover/validate`, and `/api/recover/redeploy` for runtime inspection and recovery.
 
 ## 🧩 Machine Matrix
 
@@ -40,6 +41,11 @@
 ## Referee Server (V2)
 
 - Implementation directory: `referee-server/`
+- Runtime loads configuration from process environment first, then `referee-server/.env`.
+- Production startup is fail-closed: `ADMIN_API_KEY` must be set unless explicitly overridden with `ALLOW_UNSAFE_NO_ADMIN_API_KEY=true`.
+- Competition startup requires a non-empty team roster. Keep an existing `referee.db` team table or configure `BACKEND_URL` to return `/teams`.
+- Runtime lifecycle states are explicit: `starting`, `running`, `paused`, `rotating`, `faulted`, `stopping`, `stopped`.
+- `paused` means intentionally halted and resumable after validation. `faulted` means unsafe state; use recovery APIs before resuming.
 - Start command:
 
 ```bash

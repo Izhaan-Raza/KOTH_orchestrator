@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -9,12 +10,17 @@ from fastapi.templating import Jinja2Templates
 
 from config import SETTINGS
 from db import Database
-from models import EventResponse, SkipRequest, StatusResponse, TeamResponse
-from scheduler import RefereeRuntime
+from models import (
+    EventResponse,
+    RecoveryResponse,
+    RuntimeResponse,
+    SkipRequest,
+    StatusResponse,
+    TeamResponse,
+    ValidationResponse,
+)
+from scheduler import RefereeRuntime, RuntimeGuardError
 from ssh_client import SSHClientPool
-
-app = FastAPI(title="KOTH Referee")
-
 
 db = Database(SETTINGS.db_path)
 db.initialize()
@@ -28,8 +34,29 @@ ssh_pool = SSHClientPool(
 )
 runtime = RefereeRuntime(db, ssh_pool)
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    SETTINGS.validate_runtime()
+    runtime.start_scheduler()
+    try:
+        yield
+    finally:
+        runtime.shutdown()
+
+
+app = FastAPI(title="KOTH Referee", lifespan=lifespan)
+
 templates = Jinja2Templates(directory=str(SETTINGS.templates_dir))
 app.mount("/static", StaticFiles(directory=str(SETTINGS.static_dir)), name="static")
+
+
+def run_admin_action(action) -> dict:
+    try:
+        action()
+    except RuntimeGuardError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 def require_admin_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -37,16 +64,6 @@ def require_admin_api_key(x_api_key: str | None = Header(default=None)) -> None:
         return
     if x_api_key != SETTINGS.admin_api_key:
         raise HTTPException(status_code=401, detail="unauthorized")
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    runtime.start_scheduler()
-
-
-@app.on_event("shutdown")
-def on_shutdown() -> None:
-    runtime.shutdown()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -79,6 +96,35 @@ def api_status() -> StatusResponse:
     )
 
 
+@app.get("/api/runtime", response_model=RuntimeResponse)
+def api_runtime() -> RuntimeResponse:
+    comp = db.get_competition()
+    next_rotation = comp.get("next_rotation")
+    next_rotation_seconds = None
+    if next_rotation:
+        try:
+            dt = datetime.fromisoformat(next_rotation)
+            next_rotation_seconds = max(0, int((dt - datetime.now(UTC)).total_seconds()))
+        except ValueError:
+            next_rotation_seconds = None
+
+    jobs = sorted(job.id for job in runtime.scheduler.get_jobs())
+    return RuntimeResponse(
+        competition_status=comp["status"],
+        current_series=int(comp["current_series"]),
+        previous_series=int(comp["previous_series"]) if comp.get("previous_series") is not None else None,
+        next_rotation_seconds=next_rotation_seconds,
+        fault_reason=comp.get("fault_reason"),
+        last_validated_series=(
+            int(comp["last_validated_series"]) if comp.get("last_validated_series") is not None else None
+        ),
+        last_validated_at=(
+            datetime.fromisoformat(str(comp["last_validated_at"])) if comp.get("last_validated_at") else None
+        ),
+        active_jobs=jobs,
+    )
+
+
 @app.get("/api/teams", response_model=list[TeamResponse])
 def api_teams() -> list[TeamResponse]:
     return [TeamResponse(**item) for item in db.list_teams()]
@@ -94,47 +140,57 @@ def api_events(
 
 @app.post("/api/competition/start", dependencies=[Depends(require_admin_api_key)])
 def api_start() -> dict:
-    runtime.start_competition()
-    return {"ok": True}
+    return run_admin_action(runtime.start_competition)
 
 
 @app.post("/api/competition/stop", dependencies=[Depends(require_admin_api_key)])
 def api_stop() -> dict:
-    runtime.stop_competition()
-    return {"ok": True}
+    return run_admin_action(runtime.stop_competition)
 
 
 @app.post("/api/pause", dependencies=[Depends(require_admin_api_key)])
 def api_pause() -> dict:
-    runtime.pause_rotation()
-    return {"ok": True}
+    return run_admin_action(runtime.pause_rotation)
 
 
 @app.post("/api/resume", dependencies=[Depends(require_admin_api_key)])
 def api_resume() -> dict:
-    runtime.resume_rotation()
-    return {"ok": True}
+    return run_admin_action(runtime.resume_rotation)
 
 
 @app.post("/api/rotate", dependencies=[Depends(require_admin_api_key)])
 def api_rotate() -> dict:
-    runtime.rotate_next_series()
-    return {"ok": True}
+    return run_admin_action(runtime.rotate_next_series)
 
 
 @app.post("/api/rotate/restart", dependencies=[Depends(require_admin_api_key)])
 def api_rotate_restart() -> dict:
-    runtime.restart_current_series()
-    return {"ok": True}
+    return run_admin_action(runtime.restart_current_series)
 
 
 @app.post("/api/rotate/skip", dependencies=[Depends(require_admin_api_key)])
 def api_rotate_skip(payload: SkipRequest) -> dict:
-    runtime.rotate_to_series(payload.target_series)
-    return {"ok": True}
+    return run_admin_action(lambda: runtime.rotate_to_series(payload.target_series))
 
 
 @app.post("/api/poll", dependencies=[Depends(require_admin_api_key)])
 def api_poll_once() -> dict:
-    runtime.poll_once()
-    return {"ok": True}
+    return run_admin_action(runtime.poll_once)
+
+
+@app.post("/api/recover/validate", response_model=ValidationResponse, dependencies=[Depends(require_admin_api_key)])
+def api_recover_validate() -> ValidationResponse:
+    try:
+        result = runtime.validate_current_series()
+    except RuntimeGuardError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ValidationResponse(**result)
+
+
+@app.post("/api/recover/redeploy", response_model=RecoveryResponse, dependencies=[Depends(require_admin_api_key)])
+def api_recover_redeploy() -> RecoveryResponse:
+    try:
+        result = runtime.recover_current_series()
+    except RuntimeGuardError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return RecoveryResponse(**result)

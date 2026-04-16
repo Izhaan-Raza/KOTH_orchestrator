@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+_UNSET = object()
+
 
 class Database:
     def __init__(self, path: Path):
@@ -91,25 +93,74 @@ class Database:
                     UNIQUE(machine_host, variant, series)
                 );
 
+                CREATE TABLE IF NOT EXISTS variant_ownership (
+                    series INTEGER NOT NULL,
+                    variant TEXT NOT NULL,
+                    owner_team TEXT,
+                    accepted_mtime_epoch INTEGER,
+                    accepted_at TEXT NOT NULL,
+                    source_node_host TEXT,
+                    evidence_json TEXT,
+                    PRIMARY KEY (series, variant)
+                );
+
                 CREATE TABLE IF NOT EXISTS competition (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     status TEXT NOT NULL DEFAULT 'stopped',
                     current_series INTEGER NOT NULL DEFAULT 0,
+                    previous_series INTEGER,
                     poll_cycle INTEGER NOT NULL DEFAULT 0,
                     started_at TEXT,
-                    next_rotation TEXT
+                    next_rotation TEXT,
+                    fault_reason TEXT,
+                    last_validated_series INTEGER,
+                    last_validated_at TEXT
                 );
                 """
+            )
+            self._ensure_column(
+                conn,
+                table="competition",
+                column="previous_series",
+                definition="INTEGER",
+            )
+            self._ensure_column(
+                conn,
+                table="competition",
+                column="fault_reason",
+                definition="TEXT",
+            )
+            self._ensure_column(
+                conn,
+                table="competition",
+                column="last_validated_series",
+                definition="INTEGER",
+            )
+            self._ensure_column(
+                conn,
+                table="competition",
+                column="last_validated_at",
+                definition="TEXT",
             )
             now = datetime.now(UTC).isoformat()
             conn.execute(
                 """
-                INSERT INTO competition (id, status, current_series, poll_cycle, started_at, next_rotation)
-                VALUES (1, 'stopped', 0, 0, ?, NULL)
+                INSERT INTO competition (
+                    id, status, current_series, previous_series, poll_cycle, started_at, next_rotation, fault_reason,
+                    last_validated_series, last_validated_at
+                )
+                VALUES (1, 'stopped', 0, NULL, 0, ?, NULL, NULL, NULL, NULL)
                 ON CONFLICT(id) DO NOTHING
                 """,
                 (now,),
             )
+
+    def _ensure_column(self, conn: sqlite3.Connection, *, table: str, column: str, definition: str) -> None:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        if column in existing:
+            return
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @contextmanager
     def tx(self):
@@ -149,6 +200,11 @@ class Database:
                 "SELECT name, status, offense_count, total_points FROM teams ORDER BY total_points DESC, name ASC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def team_count(self) -> int:
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) AS count FROM teams").fetchone()
+        return int(row["count"])
 
     def increment_poll_cycle(self) -> int:
         with self.tx() as conn:
@@ -234,25 +290,41 @@ class Database:
     def set_competition_state(
         self,
         *,
-        status: str | None = None,
-        current_series: int | None = None,
-        next_rotation: str | None = None,
-        started_at: str | None = None,
+        status: str | None | object = _UNSET,
+        current_series: int | None | object = _UNSET,
+        previous_series: int | None | object = _UNSET,
+        next_rotation: str | None | object = _UNSET,
+        started_at: str | None | object = _UNSET,
+        fault_reason: str | None | object = _UNSET,
+        last_validated_series: int | None | object = _UNSET,
+        last_validated_at: str | None | object = _UNSET,
     ) -> None:
         updates: list[str] = []
         params: list[Any] = []
-        if status is not None:
+        if status is not _UNSET:
             updates.append("status=?")
             params.append(status)
-        if current_series is not None:
+        if current_series is not _UNSET:
             updates.append("current_series=?")
             params.append(current_series)
-        if next_rotation is not None:
+        if previous_series is not _UNSET:
+            updates.append("previous_series=?")
+            params.append(previous_series)
+        if next_rotation is not _UNSET:
             updates.append("next_rotation=?")
             params.append(next_rotation)
-        if started_at is not None:
+        if started_at is not _UNSET:
             updates.append("started_at=?")
             params.append(started_at)
+        if fault_reason is not _UNSET:
+            updates.append("fault_reason=?")
+            params.append(fault_reason)
+        if last_validated_series is not _UNSET:
+            updates.append("last_validated_series=?")
+            params.append(last_validated_series)
+        if last_validated_at is not _UNSET:
+            updates.append("last_validated_at=?")
+            params.append(last_validated_at)
         if not updates:
             return
         params.append(1)
@@ -412,6 +484,77 @@ class Database:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def get_variant_owner(self, *, series: int, variant: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT series, variant, owner_team, accepted_mtime_epoch, accepted_at, source_node_host, evidence_json
+                FROM variant_ownership
+                WHERE series=? AND variant=?
+                """,
+                (series, variant),
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["evidence_json"] = json.loads(item["evidence_json"]) if item["evidence_json"] else None
+        return item
+
+    def list_variant_owners(self, *, series: int) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT series, variant, owner_team, accepted_mtime_epoch, accepted_at, source_node_host, evidence_json
+                FROM variant_ownership
+                WHERE series=?
+                ORDER BY variant
+                """,
+                (series,),
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["evidence_json"] = json.loads(item["evidence_json"]) if item["evidence_json"] else None
+            out.append(item)
+        return out
+
+    def set_variant_owner(
+        self,
+        *,
+        series: int,
+        variant: str,
+        owner_team: str,
+        accepted_mtime_epoch: int,
+        source_node_host: str,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        evidence_json = json.dumps(evidence) if evidence is not None else None
+        with self.tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO variant_ownership (
+                    series, variant, owner_team, accepted_mtime_epoch, accepted_at, source_node_host, evidence_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(series, variant) DO UPDATE SET
+                    owner_team=excluded.owner_team,
+                    accepted_mtime_epoch=excluded.accepted_mtime_epoch,
+                    accepted_at=excluded.accepted_at,
+                    source_node_host=excluded.source_node_host,
+                    evidence_json=excluded.evidence_json
+                """,
+                (
+                    series,
+                    variant,
+                    owner_team,
+                    accepted_mtime_epoch,
+                    now,
+                    source_node_host,
+                    evidence_json,
+                ),
+            )
+
     def reset_for_new_competition(self) -> None:
         with self.tx() as conn:
             conn.execute("DELETE FROM point_events")
@@ -419,6 +562,7 @@ class Database:
             conn.execute("DELETE FROM violations")
             conn.execute("DELETE FROM containers")
             conn.execute("DELETE FROM baselines")
+            conn.execute("DELETE FROM variant_ownership")
             conn.execute(
                 """
                 UPDATE teams
@@ -427,4 +571,18 @@ class Database:
                     total_points=0
                 """
             )
-            conn.execute("UPDATE competition SET poll_cycle=0 WHERE id=1")
+            conn.execute(
+                """
+                UPDATE competition
+                SET poll_cycle=0,
+                    previous_series=NULL,
+                    fault_reason=NULL,
+                    last_validated_series=NULL,
+                    last_validated_at=NULL
+                WHERE id=1
+                """
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()

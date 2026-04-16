@@ -59,10 +59,18 @@ Mark each item explicitly as:
   - `REMOTE_SERIES_ROOT`
   - `CONTAINER_NAME_TEMPLATE=machineH{series}{variant}`
   - `ADMIN_API_KEY`
+- [ ] Referee runtime config validates:
+  - `cd <INSTALL_ROOT>/repo/referee-server && .venv/bin/python -c "from config import SETTINGS; SETTINGS.validate_runtime()"`
 - [ ] Referee service is active (or manual uvicorn run is active)
 - [ ] Referee can SSH to all nodes using configured key
 - [ ] `python setup_cli.py --series 1` succeeds
 - [ ] Referee API `/api/status` returns valid response
+- [ ] Referee API `/api/runtime` returns valid lifecycle response with:
+  - `competition_status`
+  - `previous_series`
+  - `fault_reason`
+  - `last_validated_series`
+  - `active_jobs`
 - [ ] Local validation script passes:
   - `bash qa/deployment/validate_referee_lb.sh --series-root <INSTALL_ROOT> --referee-dir <INSTALL_ROOT>/repo/referee-server --api-url http://127.0.0.1:8000`
 - [ ] Notes:
@@ -83,6 +91,7 @@ Mark each item explicitly as:
 - [ ] Node2 validated
 - [ ] Node3 validated
 - [ ] Referee+LB validated
-- [ ] Dry run completed (`start -> status -> rotate -> stop`)
+- [ ] Dry run completed (`start -> runtime -> pause -> validate -> resume -> rotate -> stop`)
+- [ ] Recovery path verified (`faulted/paused -> /api/recover/validate -> /api/recover/redeploy -> resume`)
 - [ ] Incident rollback owner assigned
 - [ ] Notes:

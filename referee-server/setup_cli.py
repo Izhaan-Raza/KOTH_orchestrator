@@ -11,6 +11,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="KOTH referee setup helper")
     parser.add_argument("--series", type=int, default=1, help="Series to validate (default H1)")
     args = parser.parse_args()
+    SETTINGS.validate_runtime()
 
     ssh = SSHClientPool(
         username=SETTINGS.ssh_user,
