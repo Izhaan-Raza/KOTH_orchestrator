@@ -77,8 +77,8 @@ class DummyTemplates:
 
 def _override_runtime_settings(testcase: unittest.TestCase) -> None:
     overrides = {
-        "node_hosts": ("192.168.0.102", "192.168.0.106", "192.168.0.103"),
-        "node_priority": ("192.168.0.102", "192.168.0.106", "192.168.0.103"),
+        "node_hosts": ("192.168.0.102", "192.168.0.103", "192.168.0.106"),
+        "node_priority": ("192.168.0.102", "192.168.0.103", "192.168.0.106"),
         "variants": ("A", "B", "C"),
         "min_healthy_nodes": 2,
     }
@@ -122,9 +122,9 @@ class ScoringAndDriftTests(unittest.TestCase):
 
     def test_resolve_winner_excludes_degraded_and_uses_node_priority_tie_break(self) -> None:
         snapshots = [
-            _snapshot(node_host="192.168.0.103", king="Team A", king_mtime_epoch=900, status="degraded"),
+            _snapshot(node_host="192.168.0.106", king="Team A", king_mtime_epoch=900, status="degraded"),
             _snapshot(node_host="192.168.0.102", king="Team A", king_mtime_epoch=1000, status="running"),
-            _snapshot(node_host="192.168.0.106", king="Team A", king_mtime_epoch=1000, status="running"),
+            _snapshot(node_host="192.168.0.103", king="Team A", king_mtime_epoch=1000, status="running"),
         ]
 
         winners = resolve_earliest_winners(snapshots)
@@ -135,8 +135,8 @@ class ScoringAndDriftTests(unittest.TestCase):
     def test_resolve_winner_skips_malformed_claims(self) -> None:
         snapshots = [
             _snapshot(node_host="192.168.0.102", king="Bad\x01Team", king_mtime_epoch=900),
-            _snapshot(node_host="192.168.0.106", king="Good Team", king_mtime_epoch=950),
-            _snapshot(node_host="192.168.0.103", king="Good Team", king_mtime_epoch=960),
+            _snapshot(node_host="192.168.0.103", king="Good Team", king_mtime_epoch=950),
+            _snapshot(node_host="192.168.0.106", king="Good Team", king_mtime_epoch=960),
         ]
 
         winners = resolve_earliest_winners(snapshots)
@@ -145,8 +145,8 @@ class ScoringAndDriftTests(unittest.TestCase):
     def test_resolve_winner_requires_quorum_for_new_owner(self) -> None:
         snapshots = [
             _snapshot(node_host="192.168.0.102", king="Team Alpha", king_mtime_epoch=900),
-            _snapshot(node_host="192.168.0.106", king="Team Beta", king_mtime_epoch=850),
-            _snapshot(node_host="192.168.0.103", king="unclaimed", king_mtime_epoch=1000),
+            _snapshot(node_host="192.168.0.103", king="Team Beta", king_mtime_epoch=850),
+            _snapshot(node_host="192.168.0.106", king="unclaimed", king_mtime_epoch=1000),
         ]
 
         winners = resolve_earliest_winners(snapshots)
@@ -155,8 +155,8 @@ class ScoringAndDriftTests(unittest.TestCase):
     def test_existing_authoritative_owner_wins_when_it_keeps_quorum(self) -> None:
         snapshots = [
             _snapshot(node_host="192.168.0.102", king="Team Alpha", king_mtime_epoch=1000),
-            _snapshot(node_host="192.168.0.106", king="Team Alpha", king_mtime_epoch=1010),
-            _snapshot(node_host="192.168.0.103", king="Team Beta", king_mtime_epoch=900),
+            _snapshot(node_host="192.168.0.103", king="Team Alpha", king_mtime_epoch=1010),
+            _snapshot(node_host="192.168.0.106", king="Team Beta", king_mtime_epoch=900),
         ]
 
         winners = resolve_earliest_winners(
@@ -172,12 +172,12 @@ class ScoringAndDriftTests(unittest.TestCase):
 
         snapshots = [
             _snapshot(node_host="192.168.0.102", node_epoch=1000),
-            _snapshot(node_host="192.168.0.106", node_epoch=1001),
-            _snapshot(node_host="192.168.0.103", node_epoch=1010),
+            _snapshot(node_host="192.168.0.103", node_epoch=1001),
+            _snapshot(node_host="192.168.0.106", node_epoch=1010),
         ]
 
         degraded = RefereeRuntime._mark_clock_drift_degraded(runtime, series=1, snapshots=snapshots)
-        self.assertEqual(degraded, {"192.168.0.103"})
+        self.assertEqual(degraded, {"192.168.0.106"})
         self.assertEqual(snapshots[2].status, "degraded")
         runtime._log_event_and_webhook.assert_called_once()
 
@@ -219,12 +219,12 @@ class RuntimeSafetyTests(unittest.TestCase):
                     _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                 ],
                 {},
             )
@@ -272,14 +272,14 @@ class RuntimeSafetyTests(unittest.TestCase):
                 {},
                 {
                     "192.168.0.102": (False, "boom"),
-                    "192.168.0.106": (False, "boom"),
                     "192.168.0.103": (False, "boom"),
+                    "192.168.0.106": (False, "boom"),
                 },
                 {},
                 {
                     "192.168.0.102": (False, "still-broken"),
-                    "192.168.0.106": (False, "still-broken"),
                     "192.168.0.103": (False, "still-broken"),
+                    "192.168.0.106": (False, "still-broken"),
                 },
                 {},
             ]
@@ -306,8 +306,8 @@ class RuntimeSafetyTests(unittest.TestCase):
                 {},
                 {
                     "192.168.0.102": (False, "boom"),
-                    "192.168.0.106": (False, "boom"),
                     "192.168.0.103": (False, "boom"),
+                    "192.168.0.106": (False, "boom"),
                 },
                 {},
                 {},
@@ -317,12 +317,12 @@ class RuntimeSafetyTests(unittest.TestCase):
             _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
         ]
         runtime.poller.run_cycle = Mock(side_effect=[([], {}), (healthy_snapshots, {})])
 
@@ -352,12 +352,12 @@ class RuntimeSafetyTests(unittest.TestCase):
                     _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed", node_epoch=1000),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed", node_epoch=1000),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed", node_epoch=1000),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed", node_epoch=1001),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", node_epoch=1001),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", node_epoch=1001),
-                    _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed", node_epoch=1010),
-                    _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed", node_epoch=1010),
-                    _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed", node_epoch=1010),
+                    _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed", node_epoch=1001),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed", node_epoch=1010),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", node_epoch=1010),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", node_epoch=1010),
                 ],
                 {},
             )
@@ -437,12 +437,12 @@ class RuntimeSafetyTests(unittest.TestCase):
                     _snapshot(node_host="192.168.0.102", variant="A", king="Team Alpha", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="A", king=None, king_mtime_epoch=None, status="unreachable"),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="A", king=None, king_mtime_epoch=None, status="unreachable"),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="A", king=None, king_mtime_epoch=None, status="unreachable"),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                 ],
                 {},
             )
@@ -474,14 +474,14 @@ class RuntimeSafetyTests(unittest.TestCase):
             return_value=(
                 [
                     _snapshot(node_host="192.168.0.102", variant="A", king="Team Alpha", king_mtime_epoch=1000),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="Team Alpha", king_mtime_epoch=1010),
-                    _snapshot(node_host="192.168.0.103", variant="A", king="Team Beta", king_mtime_epoch=900),
+                    _snapshot(node_host="192.168.0.103", variant="A", king="Team Alpha", king_mtime_epoch=1010),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="Team Beta", king_mtime_epoch=900),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                 ],
                 {},
             )
@@ -510,14 +510,14 @@ class RuntimeSafetyTests(unittest.TestCase):
             return_value=(
                 [
                     _snapshot(node_host="192.168.0.102", variant="A", king="Team Alpha", king_mtime_epoch=1000),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="Team Alpha", king_mtime_epoch=1010),
-                    _snapshot(node_host="192.168.0.103", variant="A", king="Team Beta", king_mtime_epoch=900),
+                    _snapshot(node_host="192.168.0.103", variant="A", king="Team Alpha", king_mtime_epoch=1010),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="Team Beta", king_mtime_epoch=900),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed", king_mtime_epoch=1),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed", king_mtime_epoch=1),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed", king_mtime_epoch=1),
                 ],
                 {},
             )
@@ -528,7 +528,7 @@ class RuntimeSafetyTests(unittest.TestCase):
         ssh = runtime.ssh_pool
         self.assertEqual(len(ssh.commands), 1)
         host, command = ssh.commands[0]
-        self.assertEqual(host, "192.168.0.103")
+        self.assertEqual(host, "192.168.0.106")
         self.assertIn("Team Alpha", command)
         self.assertTrue(
             any(
@@ -591,12 +591,12 @@ class RuntimeSafetyTests(unittest.TestCase):
                     _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                 ],
                 {},
             )
@@ -621,12 +621,12 @@ class RuntimeSafetyTests(unittest.TestCase):
             _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
         ]
         runtime.poller.run_cycle = Mock(return_value=(healthy_snapshots, {}))
 
@@ -810,12 +810,12 @@ class ApiEndpointTests(unittest.TestCase):
                     _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
                     _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+                    _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
                 ],
                 {},
             )
@@ -842,12 +842,12 @@ class ApiEndpointTests(unittest.TestCase):
             _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
-            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
             _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
         ]
         self.app_module.runtime.poller.run_cycle = Mock(return_value=(healthy_snapshots, {}))
 
