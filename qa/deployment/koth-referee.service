@@ -1,0 +1,15 @@
+[Unit]
+Description=KOTH Referee Server
+After=network.target
+
+[Service]
+Type=simple
+User=recon_admin
+WorkingDirectory=/opt/KOTH_orchestrator/repo/referee-server
+EnvironmentFile=/opt/KOTH_orchestrator/repo/referee-server/.env
+ExecStart=/opt/KOTH_orchestrator/repo/referee-server/.venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

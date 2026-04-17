@@ -19,23 +19,9 @@ NODE_SSH_TARGETS=nodeA@192.168.0.102,recon_admin@192.168.0.103,nodeC@192.168.0.1
 
 Rules:
 
-- `NODE_SSH_TARGETS` is optional.
-- If it is omitted, the referee uses `SSH_USER` for every node.
-- If it is present, it must contain the same number of comma-separated entries as `NODE_HOSTS`.
-- Each entry may be either `user@host` or just `host`.
-- `user@host` overrides `SSH_USER` for that node only.
-- A bare `host` entry falls back to `SSH_USER`.
-
-## Compatibility
-
-Clusters with a shared username do not need to change anything. This still works:
-
-```env
-SSH_USER=root
-NODE_HOSTS=10.0.0.11,10.0.0.12,10.0.0.13
-```
-
-and `NODE_SSH_TARGETS` can remain unset.
+- `NODE_SSH_TARGETS` must contain the same number of comma-separated entries as `NODE_HOSTS`.
+- Each entry should be `user@host` for the corresponding node.
+- `user@host` overrides `SSH_USER` for that node.
 
 ## Current Deployment Example
 
@@ -55,7 +41,7 @@ SSH_USER=root
 SSH_PRIVATE_KEY=~/.ssh/koth_referee
 ```
 
-`SSH_USER=root` remains the default and is ignored for nodes that have explicit `user@host` overrides.
+`SSH_USER=root` remains a fallback default, but this deployment should rely on `NODE_SSH_TARGETS`.
 
 ## Verification
 
