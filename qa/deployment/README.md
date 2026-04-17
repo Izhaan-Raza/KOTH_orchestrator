@@ -34,6 +34,22 @@ bash qa/deployment/validate_referee_lb.sh \
 
 Both scripts exit non-zero if validation fails.
 
+## 2.5) Emulate referee SSH and team creation locally
+
+Use this to prove the referee bootstrap paths without touching live nodes or a live backend:
+
+```bash
+python qa/deployment/emulate_referee_paths.py \
+  --series 1 \
+  --hosts 192.168.0.70,192.168.0.103,192.168.0.106 \
+  --teams "Team Alpha,Team Beta"
+```
+
+This emulates:
+
+1. the SSH/docker checks from `referee-server/setup_cli.py`
+2. local team-roster creation in a temporary SQLite `referee.db`
+
 ## 3) Pre-build Docker image cache on challenge nodes
 
 Use this before the first competition start so `docker-compose up -d` does not

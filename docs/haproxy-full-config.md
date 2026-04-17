@@ -6,6 +6,42 @@ Use this file as a copy-ready `/etc/haproxy/haproxy.cfg` for your current node m
 - `n2 = 192.168.0.103`
 - `n3 = 192.168.0.106`
 
+Exact listener and service names to maintain on the router page / HAProxy config:
+
+| Listener / Router Entry | Challenge Service | Public Port |
+|---|---|---:|
+| `p10001` | `machineH1A` | `10001` |
+| `p10002` | `machineH1B` Redis | `10002` |
+| `p10003` | `machineH1B` SSH | `10003` |
+| `p10004` | `machineH1C` | `10004` |
+| `p10010` | `machineH2A` | `10010` |
+| `p10011` | `machineH2B` | `10011` |
+| `p10012` | `machineH2C` | `10012` |
+| `p10020` | `machineH3A` SMB | `10020` |
+| `p10021` | `machineH3A` SSH | `10021` |
+| `p10022` | `machineH3B` | `10022` |
+| `p10023` | `machineH3C` | `10023` |
+| `p10030` | `machineH4A` | `10030` |
+| `p10031` | `machineH4B` | `10031` |
+| `p10032` | `machineH4C` | `10032` |
+| `p10040` | `machineH5A` | `10040` |
+| `p10041` | `machineH5B` | `10041` |
+| `p10042` | `machineH5C` | `10042` |
+| `p10050` | `machineH6A` distcc | `10050` |
+| `p10051` | `machineH6A` NFS | `10051` |
+| `p10052` | `machineH6B` MongoDB | `10052` |
+| `p10053` | `machineH6C` HTTPS | `10053` |
+| `p10054` | `machineH6B` SSH | `10054` |
+| `p10055` | `machineH6C` SSH | `10055` |
+| `p10061` | `machineH7A` SSH | `10061` |
+| `p10062` | `machineH7B` | `10062` |
+| `p10063` | `machineH7C` | `10063` |
+| `p10070` | `machineH8A` | `10070` |
+| `p10071` | `machineH8B` | `10071` |
+| `p10072` | `machineH8C` | `10072` |
+
+When editing the router page, update the backend server rows inside these exact listener entries. Do not rename the listener names unless you are updating the HAProxy file, validator expectations, and LB dashboard together.
+
 ```cfg
 global
     log /dev/log local0
@@ -277,5 +313,11 @@ For the current deployment, the backend mapping must be:
 - `n1 = 192.168.0.70`
 - `n2 = 192.168.0.103`
 - `n3 = 192.168.0.106`
+
+That means each listener above must keep the same public port and service name, but the three backend rows under it must point at:
+
+- `server n1 192.168.0.70:<same port> check`
+- `server n2 192.168.0.103:<same port> check`
+- `server n3 192.168.0.106:<same port> check`
 
 Note: `10060` is UDP (`161/udp`) and is not included in this TCP config.

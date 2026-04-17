@@ -155,6 +155,10 @@ class Database:
                 (now,),
             )
 
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
     def _ensure_column(self, conn: sqlite3.Connection, *, table: str, column: str, definition: str) -> None:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
         existing = {str(row["name"]) for row in rows}

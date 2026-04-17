@@ -267,6 +267,12 @@ PY
 
 Edit `/etc/haproxy/haproxy.cfg` with frontends/backends for your exposed game ports.
 
+For the exact router/listener names and service-to-port map, use `docs/haproxy-full-config.md`. The important rule is:
+
+1. Keep the listener names and public ports stable.
+2. Update only the backend `server n1/n2/n3` host IPs unless the challenge compose port bindings changed.
+3. The router entries you should expect to edit are the HAProxy listener names such as `p10001`, `p10002`, `p10003`, `p10004`, ..., `p10072`.
+
 Minimal H1 example:
 
 ```cfg
@@ -329,7 +335,8 @@ Minimum edits for this deployment:
 1. Replace every `server n1 ...` host with `192.168.0.70`
 2. Replace every `server n2 ...` host with `192.168.0.103`
 3. Replace every `server n3 ...` host with `192.168.0.106`
-4. Keep the exposed frontend ports unchanged unless the series compose files changed too.
+4. Keep the exposed frontend/listener ports and service names unchanged unless the series compose files changed too.
+5. Concretely, on the router page or in `haproxy.cfg`, edit the backend rows under listener entries like `p10001`, `p10002`, `p10003`, `p10004`, ..., `p10072`.
 
 After the restart, verify that:
 
@@ -353,6 +360,20 @@ cd "$INSTALL_ROOT/repo/referee-server"
 source .venv/bin/activate
 python setup_cli.py --series 1
 ```
+
+Local emulation helper for SSH reachability and team-roster creation:
+
+```bash
+python qa/deployment/emulate_referee_paths.py \
+  --series 1 \
+  --hosts 192.168.0.70,192.168.0.103,192.168.0.106 \
+  --teams "Team Alpha,Team Beta"
+```
+
+This does not contact the live nodes or backend. It emulates:
+
+1. the same SSH/docker checks that `setup_cli.py --series 1` performs
+2. local team creation in a temporary `referee.db`
 
 Manual run:
 
