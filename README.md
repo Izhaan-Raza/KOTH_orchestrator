@@ -42,6 +42,7 @@
 
 - Implementation directory: `referee-server/`
 - Runtime loads configuration from process environment first, then `referee-server/.env`.
+- Mixed SSH usernames across challenge nodes are supported via optional `NODE_SSH_TARGETS` in `referee-server/.env`.
 - Production startup is fail-closed: `ADMIN_API_KEY` must be set unless explicitly overridden with `ALLOW_UNSAFE_NO_ADMIN_API_KEY=true`.
 - Competition startup requires a non-empty team roster. Keep an existing `referee.db` team table or configure `BACKEND_URL` to return `/teams`.
 - Runtime lifecycle states are explicit: `starting`, `running`, `paused`, `rotating`, `faulted`, `stopping`, `stopped`.

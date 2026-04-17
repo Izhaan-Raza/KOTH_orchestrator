@@ -15,16 +15,30 @@ class SSHClientPool:
         port: int,
         timeout_seconds: int,
         strict_host_key_checking: bool,
+        host_target_overrides: dict[str, str] | None = None,
     ):
         self._username = username
         self._private_key_path = str(Path(private_key_path).expanduser())
         self._port = port
         self._timeout_seconds = timeout_seconds
         self._strict_host_key_checking = strict_host_key_checking
+        self._host_target_overrides = dict(host_target_overrides or {})
         self._lock = threading.RLock()
         self._clients: dict[str, paramiko.SSHClient] = {}
 
+    def _resolve_target(self, host: str) -> str:
+        return self._host_target_overrides.get(host, host)
+
+    def _split_target(self, target: str) -> tuple[str, str]:
+        if "@" not in target:
+            return self._username, target
+        username, hostname = target.rsplit("@", 1)
+        if not username or not hostname:
+            return self._username, target
+        return username, hostname
+
     def _connect(self, host: str) -> paramiko.SSHClient:
+        username, hostname = self._split_target(host)
         client = paramiko.SSHClient()
         client.load_system_host_keys()
         if self._strict_host_key_checking:
@@ -32,9 +46,9 @@ class SSHClientPool:
         else:
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(
-            hostname=host,
+            hostname=hostname,
             port=self._port,
-            username=self._username,
+            username=username,
             key_filename=self._private_key_path,
             timeout=self._timeout_seconds,
             banner_timeout=self._timeout_seconds,
@@ -43,12 +57,13 @@ class SSHClientPool:
         return client
 
     def _get_client(self, host: str) -> paramiko.SSHClient:
+        target = self._resolve_target(host)
         with self._lock:
-            existing = self._clients.get(host)
+            existing = self._clients.get(target)
             if existing is not None:
                 return existing
-            client = self._connect(host)
-            self._clients[host] = client
+            client = self._connect(target)
+            self._clients[target] = client
             return client
 
     def exec(self, host: str, command: str) -> tuple[int, str, str]:
@@ -65,8 +80,9 @@ class SSHClientPool:
             raise
 
     def reset_host(self, host: str) -> None:
+        target = self._resolve_target(host)
         with self._lock:
-            client = self._clients.pop(host, None)
+            client = self._clients.pop(target, None)
             if client is not None:
                 client.close()
 

@@ -59,6 +59,7 @@ Mark each item explicitly as:
   - `REMOTE_SERIES_ROOT`
   - `CONTAINER_NAME_TEMPLATE=machineH{series}{variant}`
   - `ADMIN_API_KEY`
+- [ ] If node usernames differ, `.env` includes `NODE_SSH_TARGETS` with one entry per node in `NODE_HOSTS`
 - [ ] Referee runtime config validates:
   - `cd <INSTALL_ROOT>/repo/referee-server && .venv/bin/python -c "from config import SETTINGS; SETTINGS.validate_runtime()"`
 - [ ] Referee service is active (or manual uvicorn run is active)
@@ -80,6 +81,7 @@ Mark each item explicitly as:
 - [ ] Same `INSTALL_ROOT` model chosen everywhere (`/opt/KOTH_orchestrator` OR `$HOME/KOTH_orchestrator`)
 - [ ] `REMOTE_SERIES_ROOT` in referee `.env` matches actual path on all 3 nodes
 - [ ] `NODE_HOSTS` and `NODE_PRIORITY` match actual node IPs
+- [ ] If `NODE_SSH_TARGETS` is set, its entries match the real `user@host` SSH targets for those same nodes
 - [ ] All nodes reachable from referee via SSH
 - [ ] Clock drift across nodes is within threshold during dry poll
 - [ ] LB fronts the intended challenge ports

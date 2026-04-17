@@ -31,6 +31,7 @@ ssh_pool = SSHClientPool(
     port=SETTINGS.ssh_port,
     timeout_seconds=SETTINGS.ssh_timeout_seconds,
     strict_host_key_checking=SETTINGS.ssh_strict_host_key_checking,
+    host_target_overrides=SETTINGS.ssh_target_overrides(),
 )
 runtime = RefereeRuntime(db, ssh_pool)
 

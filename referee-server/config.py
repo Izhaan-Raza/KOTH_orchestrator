@@ -56,11 +56,12 @@ class Settings:
     db_path: Path = Path(os.getenv("DB_PATH", "./referee.db"))
 
     node_hosts: tuple[str, ...] = tuple(
-        _split_csv(os.getenv("NODE_HOSTS", "192.168.0.102,192.168.0.103,192.168.0.106"))
+        _split_csv(os.getenv("NODE_HOSTS", "192.168.0.102,192.168.0.106,192.168.0.103"))
     )
     node_priority: tuple[str, ...] = tuple(
-        _split_csv(os.getenv("NODE_PRIORITY", "192.168.0.102,192.168.0.103,192.168.0.106"))
+        _split_csv(os.getenv("NODE_PRIORITY", "192.168.0.102,192.168.0.106,192.168.0.103"))
     )
+    node_ssh_targets: tuple[str, ...] = tuple(_split_csv(os.getenv("NODE_SSH_TARGETS", "")))
 
     ssh_user: str = os.getenv("SSH_USER", "root")
     ssh_port: int = int(os.getenv("SSH_PORT", "22"))
@@ -98,6 +99,11 @@ class Settings:
     static_dir: Path = Path(__file__).parent / "static"
     templates_dir: Path = Path(__file__).parent / "templates"
 
+    def ssh_target_overrides(self) -> dict[str, str]:
+        if not self.node_ssh_targets:
+            return {}
+        return dict(zip(self.node_hosts, self.node_ssh_targets))
+
     def validate_runtime(self) -> None:
         if not self.admin_api_key and not self.allow_unsafe_no_admin_api_key:
             raise RuntimeError(
@@ -105,6 +111,8 @@ class Settings:
             )
         if not self.node_hosts:
             raise RuntimeError("NODE_HOSTS must define at least one challenge node")
+        if self.node_ssh_targets and len(self.node_ssh_targets) != len(self.node_hosts):
+            raise RuntimeError("NODE_SSH_TARGETS must have the same number of entries as NODE_HOSTS")
         if self.min_healthy_nodes < 1:
             raise RuntimeError("MIN_HEALTHY_NODES must be >= 1")
         if self.min_healthy_nodes > len(self.node_hosts):

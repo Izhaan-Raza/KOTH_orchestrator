@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.log
+.venv/
+referee-server/referee.db
 .env
 .DS_Store
 .idea/

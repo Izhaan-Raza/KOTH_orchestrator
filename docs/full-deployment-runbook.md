@@ -12,10 +12,10 @@ No separate LB machine is used.
 
 Use these hosts (example):
 
-1. `node1`: `nodeA@192.168.0.102`
-2. `node2`: `recon_admin@192.168.0.103`
-3. `node3`: `nodeC@192.168.0.106`
-4. `referee` (Referee API + Scheduler + HAProxy): `recon_admin@192.168.0.100`
+1. `node1`: `192.168.0.102`
+2. `node2`: `192.168.0.106`
+3. `node3`: `192.168.0.102`
+4. `referee` (Referee API + Scheduler + HAProxy): `192.168.0.100`
 
 Use `KOTH_orchestrator` naming consistently for paths.
 
@@ -182,7 +182,17 @@ chmod 700 ~/.ssh
 ssh-keygen -t ed25519 -f ~/.ssh/koth_referee -N ""
 ```
 
-Install key on nodes:
+Install key on nodes.
+
+If every node uses the same account, install to that shared user:
+
+```bash
+ssh-copy-id -i ~/.ssh/koth_referee.pub root@10.0.0.11
+ssh-copy-id -i ~/.ssh/koth_referee.pub root@10.0.0.12
+ssh-copy-id -i ~/.ssh/koth_referee.pub root@10.0.0.13
+```
+
+If nodes use different accounts, install the same key to each account actually used by the referee. Example:
 
 ```bash
 ssh-copy-id -i ~/.ssh/koth_referee.pub nodeA@192.168.0.102
@@ -193,11 +203,26 @@ ssh-copy-id -i ~/.ssh/koth_referee.pub nodeC@192.168.0.106
 Record host keys:
 
 ```bash
+ssh-keyscan -H 10.0.0.11 10.0.0.12 10.0.0.13 >> ~/.ssh/known_hosts
+chmod 600 ~/.ssh/known_hosts
+```
+
+If the cluster uses different addresses, scan those actual node IPs instead. Example:
+
+```bash
 ssh-keyscan -H 192.168.0.102 192.168.0.103 192.168.0.106 >> ~/.ssh/known_hosts
 chmod 600 ~/.ssh/known_hosts
 ```
 
 Quick SSH test:
+
+```bash
+ssh -i ~/.ssh/koth_referee root@10.0.0.11 "hostname"
+ssh -i ~/.ssh/koth_referee root@10.0.0.12 "hostname"
+ssh -i ~/.ssh/koth_referee root@10.0.0.13 "hostname"
+```
+
+If accounts differ by node, test those exact targets instead:
 
 ```bash
 ssh -i ~/.ssh/koth_referee nodeA@192.168.0.102 "hostname"
@@ -214,10 +239,10 @@ APP_HOST=0.0.0.0
 APP_PORT=8000
 DB_PATH=./referee.db
 
-NODE_HOSTS=192.168.0.102,192.168.0.103,192.168.0.106
-NODE_PRIORITY=192.168.0.102,192.168.0.103,192.168.0.106
+NODE_HOSTS=10.0.0.11,10.0.0.12,10.0.0.13
+NODE_PRIORITY=10.0.0.11,10.0.0.12,10.0.0.13
 
-SSH_USER=<common-node-ssh-user>
+SSH_USER=root
 SSH_PORT=22
 SSH_PRIVATE_KEY=~/.ssh/koth_referee
 SSH_TIMEOUT_SECONDS=8
@@ -239,10 +264,29 @@ ADMIN_API_KEY=replace-with-long-random-value
 MIN_HEALTHY_NODES=2
 ```
 
+Optional mixed-user override:
+
+```env
+NODE_HOSTS=192.168.0.102,192.168.0.103,192.168.0.106
+NODE_PRIORITY=192.168.0.102,192.168.0.103,192.168.0.106
+NODE_SSH_TARGETS=nodeA@192.168.0.102,recon_admin@192.168.0.103,nodeC@192.168.0.106
+
+SSH_USER=root
+SSH_PORT=22
+SSH_PRIVATE_KEY=~/.ssh/koth_referee
+```
+
 If using `$HOME` layout, set:
 
 1. `REMOTE_SERIES_ROOT=/home/<node-user>/KOTH_orchestrator`
 2. This path must exist identically on all node machines.
+
+Additional notes:
+
+1. `SSH_USER` remains the default username for nodes without explicit overrides.
+2. `NODE_SSH_TARGETS` is optional, but if set it must contain one entry for each `NODE_HOSTS` value.
+3. Keep `NODE_HOSTS` and `NODE_PRIORITY` as plain host/IP values. Put usernames only in `NODE_SSH_TARGETS`.
+4. See [referee-per-node-ssh-targets.md](/opt/KOTH_orchestrator/repo/docs/referee-per-node-ssh-targets.md) for mixed-user details.
 
 Generate a strong API key:
 
@@ -256,8 +300,6 @@ PY
 ## 3.6 HAProxy config on referee host
 
 Edit `/etc/haproxy/haproxy.cfg` with frontends/backends for your exposed game ports.
-For a full copy-ready file covering all mapped TCP ports, use:
-`docs/haproxy-full-config.md`
 
 Minimal H1 example:
 
@@ -276,27 +318,27 @@ frontend h1a
   default_backend h1a_nodes
 backend h1a_nodes
   balance roundrobin
-  server n1 192.168.0.102:10001 check
-  server n2 192.168.0.103:10001 check
-  server n3 192.168.0.106:10001 check
+  server n1 10.0.0.11:10001 check
+  server n2 10.0.0.12:10001 check
+  server n3 10.0.0.13:10001 check
 
 frontend h1b
   bind *:10002
   default_backend h1b_nodes
 backend h1b_nodes
   balance roundrobin
-  server n1 192.168.0.102:10002 check
-  server n2 192.168.0.103:10002 check
-  server n3 192.168.0.106:10002 check
+  server n1 10.0.0.11:10002 check
+  server n2 10.0.0.12:10002 check
+  server n3 10.0.0.13:10002 check
 
 frontend h1c
   bind *:10004
   default_backend h1c_nodes
 backend h1c_nodes
   balance roundrobin
-  server n1 192.168.0.102:10004 check
-  server n2 192.168.0.103:10004 check
-  server n3 192.168.0.106:10004 check
+  server n1 10.0.0.11:10004 check
+  server n2 10.0.0.12:10004 check
+  server n3 10.0.0.13:10004 check
 ```
 
 Validate and start:
@@ -328,6 +370,8 @@ Notes:
 1. `referee-server` auto-loads `./.env`, so manual `uvicorn` and `setup_cli.py` use the same configuration as systemd.
 2. Startup fails if `ADMIN_API_KEY` is empty unless `ALLOW_UNSAFE_NO_ADMIN_API_KEY=true`.
 3. Startup also fails if no teams exist locally and `BACKEND_URL` does not provide `/teams`.
+4. `python` is expected to come from the activated virtualenv in the commands above.
+5. If node usernames differ, configure `NODE_SSH_TARGETS` before running `python setup_cli.py --series 1`.
 
 Or systemd service:
 
