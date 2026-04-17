@@ -8,7 +8,7 @@ Mark each item explicitly as:
 2. `[ ]` not complete
 3. Add notes for any failure
 
-## A) Node1 (`nodeA@192.168.0.102`)
+## A) Node1 (`nodeA@192.168.0.70`)
 
 - [ ] `chrony` is active and synchronized
 - [ ] `docker` is installed and daemon is running
@@ -20,7 +20,7 @@ Mark each item explicitly as:
   - `bash qa/deployment/validate_koth_node.sh --series-root <INSTALL_ROOT>`
 - [ ] Notes:
 
-## B) Node2 (`recon_admin@192.168.0.103`)
+## B) Node2 (`nodeB@192.168.0.103`)
 
 - [ ] `chrony` is active and synchronized
 - [ ] `docker` is installed and daemon is running
@@ -44,7 +44,7 @@ Mark each item explicitly as:
   - `bash qa/deployment/validate_koth_node.sh --series-root <INSTALL_ROOT>`
 - [ ] Notes:
 
-## D) Referee + LB Host
+## D) Referee + LB Host (`192.168.0.12`)
 
 - [ ] `chrony` is active and synchronized
 - [ ] `haproxy` installed and config validates (`haproxy -c`)

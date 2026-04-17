@@ -51,7 +51,7 @@ Useful variants:
 bash qa/deployment/prebuild_series_cache.sh --series 1
 
 # Build H1 and H2 on a single node
-bash qa/deployment/prebuild_series_cache.sh --series 1,2 --hosts 192.168.0.102
+bash qa/deployment/prebuild_series_cache.sh --series 1,2 --hosts 192.168.0.70
 
 # Force base-image refresh during build
 bash qa/deployment/prebuild_series_cache.sh --pull

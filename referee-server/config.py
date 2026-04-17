@@ -56,10 +56,10 @@ class Settings:
     db_path: Path = Path(os.getenv("DB_PATH", "./referee.db"))
 
     node_hosts: tuple[str, ...] = tuple(
-        _split_csv(os.getenv("NODE_HOSTS", "192.168.0.102,192.168.0.106,192.168.0.103"))
+        _split_csv(os.getenv("NODE_HOSTS", "192.168.0.70,192.168.0.103,192.168.0.106"))
     )
     node_priority: tuple[str, ...] = tuple(
-        _split_csv(os.getenv("NODE_PRIORITY", "192.168.0.102,192.168.0.106,192.168.0.103"))
+        _split_csv(os.getenv("NODE_PRIORITY", "192.168.0.70,192.168.0.103,192.168.0.106"))
     )
     node_ssh_targets: tuple[str, ...] = tuple(_split_csv(os.getenv("NODE_SSH_TARGETS", "")))
 

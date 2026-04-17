@@ -255,16 +255,11 @@
 
   <script>
     const apiKeyInput = document.getElementById('apiKey');
-    const savedApiKey = localStorage.getItem('refereeApiKey');
-    if (savedApiKey) {
-      apiKeyInput.value = savedApiKey;
-    }
-    apiKeyInput.addEventListener('input', () => {
-      localStorage.setItem('refereeApiKey', apiKeyInput.value);
-    });
 
     async function getJson(url) {
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        headers: apiHeaders(),
+      });
       if (!res.ok) {
         throw new Error(await res.text());
       }
@@ -314,6 +309,15 @@
 
     function textOrFallback(value, fallback = 'n/a') {
       return value === null || value === undefined || value === '' ? fallback : value;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
     }
 
     function formatTimestamp(value) {
@@ -509,8 +513,8 @@
         .slice(0, 25)
         .map(team => `
           <tr>
-            <td>${team.name}</td>
-            <td><span class="pill ${pillToneClass(team.status)}">${team.status}</span></td>
+            <td>${escapeHtml(team.name)}</td>
+            <td><span class="pill ${pillToneClass(team.status)}">${escapeHtml(team.status)}</span></td>
             <td>${team.offense_count}</td>
             <td>${team.total_points.toFixed(1)}</td>
           </tr>
@@ -522,11 +526,11 @@
       document.getElementById('containersTable').innerHTML = containers
         .map(container => `
           <tr>
-            <td>${container.machine_host}</td>
-            <td>${container.variant}</td>
-            <td><span class="pill ${pillToneClass(container.status)}">${container.status}</span></td>
-            <td class="mono">${container.container_id}</td>
-            <td>${textOrFallback(container.king)}</td>
+            <td>${escapeHtml(container.machine_host)}</td>
+            <td>${escapeHtml(container.variant)}</td>
+            <td><span class="pill ${pillToneClass(container.status)}">${escapeHtml(container.status)}</span></td>
+            <td class="mono">${escapeHtml(container.container_id)}</td>
+            <td>${escapeHtml(textOrFallback(container.king))}</td>
             <td>${formatSeries(container.series)}</td>
           </tr>
         `)
@@ -538,9 +542,9 @@
         .map(event => `
           <tr>
             <td class="mono">${new Date(event.timestamp).toLocaleString()}</td>
-            <td><span class="pill ${pillToneClass(event.severity)}">${event.severity}</span></td>
-            <td>${event.type}</td>
-            <td>${event.detail}</td>
+            <td><span class="pill ${pillToneClass(event.severity)}">${escapeHtml(event.severity)}</span></td>
+            <td>${escapeHtml(event.type)}</td>
+            <td>${escapeHtml(event.detail)}</td>
           </tr>
         `)
         .join('');
@@ -566,7 +570,7 @@
       document.getElementById('lbNodes').innerHTML = nodeEntries
         .map(([host, count]) => `
           <div class="node-card ${pillToneClass(loadTone(count, peakNodeLoad))}">
-            <span>${host}</span>
+            <span>${escapeHtml(host)}</span>
             <strong>${count}</strong>
           </div>
         `)
@@ -578,15 +582,15 @@
         .sort((a, b) => b.backend_connections - a.backend_connections || a.bind_port - b.bind_port)
         .map(service => `
           <tr>
-            <td>${service.name}</td>
+            <td>${escapeHtml(service.name)}</td>
             <td>${service.bind_port}</td>
             <td>${service.inbound_connections}</td>
             <td>${service.backend_connections}</td>
             <td class="distribution">
               ${service.servers.map(server => `
                 <div class="dist-row">
-                  <span class="mono">${server.name}</span>
-                  <span>${server.host}:${server.port}</span>
+                  <span class="mono">${escapeHtml(server.name)}</span>
+                  <span>${escapeHtml(server.host)}:${server.port}</span>
                   <strong>${server.active_connections}</strong>
                 </div>
               `).join('')}
@@ -649,6 +653,10 @@
 
     async function refresh() {
       try {
+        if (!apiKeyInput.value.trim()) {
+          logAction('enter the admin API key to load runtime data');
+          return;
+        }
         const [status, runtime, teams, events, lb] = await Promise.all([
           getJson('/api/status'),
           getJson('/api/runtime'),

@@ -12,10 +12,10 @@ No separate LB machine is used.
 
 Use these hosts (example):
 
-1. `node1`: `192.168.0.102`
-2. `node2`: `192.168.0.106`
-3. `node3`: `192.168.0.102`
-4. `referee` (Referee API + Scheduler + HAProxy): `192.168.0.100`
+1. `node1`: `192.168.0.70`
+2. `node2`: `192.168.0.103`
+3. `node3`: `192.168.0.106`
+4. `referee` (Referee API + Scheduler + HAProxy): `192.168.0.12`
 
 Use `KOTH_orchestrator` naming consistently for paths.
 
@@ -187,23 +187,23 @@ Install key on nodes.
 Install the same key to the exact node accounts used by the referee:
 
 ```bash
-ssh-copy-id -i ~/.ssh/koth_referee.pub nodeA@192.168.0.102
-ssh-copy-id -i ~/.ssh/koth_referee.pub recon_admin@192.168.0.103
+ssh-copy-id -i ~/.ssh/koth_referee.pub nodeA@192.168.0.70
+ssh-copy-id -i ~/.ssh/koth_referee.pub nodeB@192.168.0.103
 ssh-copy-id -i ~/.ssh/koth_referee.pub nodeC@192.168.0.106
 ```
 
 Record host keys:
 
 ```bash
-ssh-keyscan -H 192.168.0.102 192.168.0.103 192.168.0.106 >> ~/.ssh/known_hosts
+ssh-keyscan -H 192.168.0.70 192.168.0.103 192.168.0.106 >> ~/.ssh/known_hosts
 chmod 600 ~/.ssh/known_hosts
 ```
 
 Quick SSH test:
 
 ```bash
-ssh -i ~/.ssh/koth_referee nodeA@192.168.0.102 "hostname"
-ssh -i ~/.ssh/koth_referee recon_admin@192.168.0.103 "hostname"
+ssh -i ~/.ssh/koth_referee nodeA@192.168.0.70 "hostname"
+ssh -i ~/.ssh/koth_referee nodeB@192.168.0.103 "hostname"
 ssh -i ~/.ssh/koth_referee nodeC@192.168.0.106 "hostname"
 ```
 
@@ -216,9 +216,9 @@ APP_HOST=0.0.0.0
 APP_PORT=8000
 DB_PATH=./referee.db
 
-NODE_HOSTS=192.168.0.102,192.168.0.103,192.168.0.106
-NODE_PRIORITY=192.168.0.102,192.168.0.103,192.168.0.106
-NODE_SSH_TARGETS=nodeA@192.168.0.102,recon_admin@192.168.0.103,nodeC@192.168.0.106
+NODE_HOSTS=192.168.0.70,192.168.0.103,192.168.0.106
+NODE_PRIORITY=192.168.0.70,192.168.0.103,192.168.0.106
+NODE_SSH_TARGETS=nodeA@192.168.0.70,nodeB@192.168.0.103,nodeC@192.168.0.106
 
 SSH_USER=root
 SSH_PORT=22
@@ -284,7 +284,7 @@ frontend h1a
   default_backend h1a_nodes
 backend h1a_nodes
   balance roundrobin
-  server n1 192.168.0.102:10001 check
+  server n1 192.168.0.70:10001 check
   server n2 192.168.0.103:10001 check
   server n3 192.168.0.106:10001 check
 
@@ -293,7 +293,7 @@ frontend h1b
   default_backend h1b_nodes
 backend h1b_nodes
   balance roundrobin
-  server n1 192.168.0.102:10002 check
+  server n1 192.168.0.70:10002 check
   server n2 192.168.0.103:10002 check
   server n3 192.168.0.106:10002 check
 
@@ -302,7 +302,7 @@ frontend h1c
   default_backend h1c_nodes
 backend h1c_nodes
   balance roundrobin
-  server n1 192.168.0.102:10004 check
+  server n1 192.168.0.70:10004 check
   server n2 192.168.0.103:10004 check
   server n3 192.168.0.106:10004 check
 ```
@@ -313,6 +313,35 @@ Validate and start:
 sudo haproxy -c -f /etc/haproxy/haproxy.cfg
 sudo systemctl enable --now haproxy
 sudo systemctl restart haproxy
+```
+
+If the active challenge-node IPs rotate, update the HAProxy backend `server` lines first, then restart HAProxy against the new map:
+
+```bash
+sudo editor /etc/haproxy/haproxy.cfg
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+sudo systemctl restart haproxy
+sudo systemctl --no-pager --full status haproxy
+```
+
+Minimum edits for this deployment:
+
+1. Replace every `server n1 ...` host with `192.168.0.70`
+2. Replace every `server n2 ...` host with `192.168.0.103`
+3. Replace every `server n3 ...` host with `192.168.0.106`
+4. Keep the exposed frontend ports unchanged unless the series compose files changed too.
+
+After the restart, verify that:
+
+1. `systemctl status haproxy` is `active (running)`
+2. `curl http://127.0.0.1:8000/api/runtime` still answers on the referee/LB host
+3. The validator still passes:
+
+```bash
+bash qa/deployment/validate_referee_lb.sh \
+  --series-root "$INSTALL_ROOT" \
+  --referee-dir "$INSTALL_ROOT/repo/referee-server" \
+  --api-url "http://127.0.0.1:8000"
 ```
 
 ## 3.7 Start referee
@@ -337,7 +366,7 @@ Notes:
 2. Startup fails if `ADMIN_API_KEY` is empty unless `ALLOW_UNSAFE_NO_ADMIN_API_KEY=true`.
 3. Startup also fails if no teams exist locally and `BACKEND_URL` does not provide `/teams`.
 4. `python` is expected to come from the activated virtualenv in the commands above.
-5. This deployment expects `NODE_SSH_TARGETS=nodeA@192.168.0.102,recon_admin@192.168.0.103,nodeC@192.168.0.106`.
+5. This deployment expects `NODE_SSH_TARGETS=nodeA@192.168.0.70,nodeB@192.168.0.103,nodeC@192.168.0.106`.
 
 Or systemd service:
 

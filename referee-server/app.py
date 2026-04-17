@@ -42,6 +42,8 @@ ssh_pool = SSHClientPool(
 runtime = RefereeRuntime(db, ssh_pool)
 HAPROXY_CONFIG_PATH = Path("/etc/haproxy/haproxy.cfg")
 LISTEN_RE = re.compile(r"^listen\s+(\S+)")
+FRONTEND_RE = re.compile(r"^frontend\s+(\S+)")
+BACKEND_RE = re.compile(r"^backend\s+(\S+)")
 BIND_RE = re.compile(r"^bind\s+\*?:(\d+)")
 SERVER_RE = re.compile(r"^server\s+(\S+)\s+([0-9.]+):(\d+)")
 
@@ -119,8 +121,12 @@ def _haproxy_services() -> list[dict]:
     if not HAPROXY_CONFIG_PATH.is_file():
         return []
 
-    services: list[dict] = []
-    current: dict | None = None
+    frontends: dict[str, dict] = {}
+    backends: dict[str, list[dict]] = {}
+    listens: list[dict] = []
+    current_kind: str | None = None
+    current_name: str | None = None
+
     for raw_line in HAPROXY_CONFIG_PATH.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -128,29 +134,68 @@ def _haproxy_services() -> list[dict]:
 
         listen_match = LISTEN_RE.match(line)
         if listen_match:
-            current = {"name": listen_match.group(1), "bind_port": None, "servers": []}
-            services.append(current)
+            current_kind = "listen"
+            current_name = listen_match.group(1)
+            listens.append({"name": current_name, "bind_port": None, "servers": []})
             continue
 
-        if current is None:
+        frontend_match = FRONTEND_RE.match(line)
+        if frontend_match:
+            current_kind = "frontend"
+            current_name = frontend_match.group(1)
+            frontends[current_name] = {"name": current_name, "bind_port": None, "backend": None}
+            continue
+
+        backend_match = BACKEND_RE.match(line)
+        if backend_match:
+            current_kind = "backend"
+            current_name = backend_match.group(1)
+            backends.setdefault(current_name, [])
+            continue
+
+        if current_kind is None or current_name is None:
             continue
 
         bind_match = BIND_RE.match(line)
-        if bind_match:
-            current["bind_port"] = int(bind_match.group(1))
+        if bind_match and current_kind in {"listen", "frontend"}:
+            bind_port = int(bind_match.group(1))
+            if current_kind == "listen":
+                listens[-1]["bind_port"] = bind_port
+            else:
+                frontends[current_name]["bind_port"] = bind_port
             continue
 
         server_match = SERVER_RE.match(line)
-        if server_match:
-            current["servers"].append(
-                {
-                    "name": server_match.group(1),
-                    "host": server_match.group(2),
-                    "port": int(server_match.group(3)),
-                }
-            )
+        if server_match and current_kind in {"listen", "backend"}:
+            server = {
+                "name": server_match.group(1),
+                "host": server_match.group(2),
+                "port": int(server_match.group(3)),
+            }
+            if current_kind == "listen":
+                listens[-1]["servers"].append(server)
+            else:
+                backends.setdefault(current_name, []).append(server)
+            continue
 
-    return [service for service in services if service.get("bind_port") and service.get("servers")]
+        if current_kind == "frontend" and line.startswith("default_backend "):
+            frontends[current_name]["backend"] = line.split(None, 1)[1].strip()
+
+    services = [service for service in listens if service.get("bind_port") and service.get("servers")]
+    for frontend in frontends.values():
+        bind_port = frontend.get("bind_port")
+        backend_name = frontend.get("backend")
+        servers = backends.get(backend_name or "", [])
+        if not bind_port or not servers:
+            continue
+        services.append(
+            {
+                "name": frontend["name"],
+                "bind_port": bind_port,
+                "servers": servers,
+            }
+        )
+    return services
 
 
 def _ss_established_rows() -> list[tuple[str, str]]:
@@ -242,7 +287,7 @@ def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {"request": request})
 
 
-@app.get("/api/status", response_model=StatusResponse)
+@app.get("/api/status", response_model=StatusResponse, dependencies=[Depends(require_admin_api_key)])
 def api_status() -> StatusResponse:
     comp = db.get_competition()
     next_rotation = comp.get("next_rotation")
@@ -267,7 +312,7 @@ def api_status() -> StatusResponse:
     )
 
 
-@app.get("/api/runtime", response_model=RuntimeResponse)
+@app.get("/api/runtime", response_model=RuntimeResponse, dependencies=[Depends(require_admin_api_key)])
 def api_runtime() -> RuntimeResponse:
     comp = db.get_competition()
     next_rotation = comp.get("next_rotation")
@@ -296,17 +341,17 @@ def api_runtime() -> RuntimeResponse:
     )
 
 
-@app.get("/api/lb", response_model=LbStatusResponse)
+@app.get("/api/lb", response_model=LbStatusResponse, dependencies=[Depends(require_admin_api_key)])
 def api_lb_status() -> LbStatusResponse:
     return _lb_status()
 
 
-@app.get("/api/teams", response_model=list[TeamResponse])
+@app.get("/api/teams", response_model=list[TeamResponse], dependencies=[Depends(require_admin_api_key)])
 def api_teams() -> list[TeamResponse]:
     return [TeamResponse(**item) for item in db.list_teams()]
 
 
-@app.get("/api/events", response_model=list[EventResponse])
+@app.get("/api/events", response_model=list[EventResponse], dependencies=[Depends(require_admin_api_key)])
 def api_events(
     limit: int = Query(default=50, ge=1, le=500),
     type: str | None = Query(default=None),

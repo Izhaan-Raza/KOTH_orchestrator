@@ -759,6 +759,8 @@ class ApiEndpointTests(unittest.TestCase):
         self.app_module.ssh_pool = self.original_ssh_pool
 
     def test_runtime_endpoint_returns_extended_state(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
         validated_at = datetime.now(UTC).isoformat()
         self.app_module.db.set_competition_state(
             status="faulted",
@@ -797,10 +799,57 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("poll", payload["active_jobs"])
         self.assertIn("rotate", payload["active_jobs"])
 
+    def test_runtime_endpoint_requires_admin_key(self) -> None:
+        response = self.client.get("/api/runtime")
+        self.assertEqual(response.status_code, 401)
+
+    def test_status_endpoint_requires_admin_key(self) -> None:
+        response = self.client.get("/api/status")
+        self.assertEqual(response.status_code, 401)
+
     def test_dashboard_route_renders_template(self) -> None:
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
+
+    def test_lb_endpoint_parses_frontend_backend_haproxy_config(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        cfg = """
+frontend h1a
+  bind *:10001
+  default_backend h1a_nodes
+backend h1a_nodes
+  balance roundrobin
+  server n1 192.168.0.70:10001 check
+  server n2 192.168.0.103:10001 check
+  server n3 192.168.0.106:10001 check
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            haproxy_cfg = Path(tmpdir) / "haproxy.cfg"
+            haproxy_cfg.write_text(cfg, encoding="utf-8")
+            previous_path = self.app_module.HAPROXY_CONFIG_PATH
+            self.app_module.HAPROXY_CONFIG_PATH = haproxy_cfg
+            try:
+                response = self.client.get("/api/lb")
+            finally:
+                self.app_module.HAPROXY_CONFIG_PATH = previous_path
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["configured"])
+        self.assertEqual(len(payload["services"]), 1)
+        self.assertEqual(payload["services"][0]["name"], "h1a")
+        self.assertEqual(payload["services"][0]["bind_port"], 10001)
+        self.assertEqual(len(payload["services"][0]["servers"]), 3)
+
+    def test_lb_endpoint_requires_admin_key(self) -> None:
+        response = self.client.get("/api/lb")
+        self.assertEqual(response.status_code, 401)
+
+    def test_teams_and_events_endpoints_require_admin_key(self) -> None:
+        self.assertEqual(self.client.get("/api/teams").status_code, 401)
+        self.assertEqual(self.client.get("/api/events").status_code, 401)
 
     def test_recover_validate_endpoint_requires_admin_key(self) -> None:
         response = self.client.post("/api/recover/validate")
