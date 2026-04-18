@@ -97,6 +97,7 @@ Special case:
 global
     log /dev/log local0
     log /dev/log local1 notice
+    stats socket /run/haproxy/admin.sock mode 660 level admin
     daemon
     user haproxy
     group haproxy

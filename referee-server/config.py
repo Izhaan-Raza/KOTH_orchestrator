@@ -100,6 +100,10 @@ class Settings:
     )
     referee_log_path: Path = Path(os.getenv("REFEREE_LOG_PATH", "./referee.log"))
     haproxy_log_path: Path = Path(os.getenv("HAPROXY_LOG_PATH", "/var/log/haproxy.log"))
+    haproxy_config_path: Path = Path(os.getenv("HAPROXY_CONFIG_PATH", "/etc/haproxy/haproxy.cfg"))
+    haproxy_admin_socket_path: Path = Path(
+        os.getenv("HAPROXY_ADMIN_SOCKET_PATH", "/run/haproxy/admin.sock")
+    )
 
     static_dir: Path = Path(__file__).parent / "static"
     templates_dir: Path = Path(__file__).parent / "templates"

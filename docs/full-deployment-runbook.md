@@ -159,6 +159,15 @@ sudo systemctl enable --now chrony
 chronyc tracking
 ```
 
+For HAProxy backend drain/maintenance control from the referee, ensure the runtime socket is enabled and the referee service user can access it:
+
+```bash
+grep -q 'stats socket /run/haproxy/admin.sock' /etc/haproxy/haproxy.cfg || \
+  echo 'stats socket /run/haproxy/admin.sock mode 660 level admin' | sudo tee -a /etc/haproxy/haproxy.cfg
+sudo usermod -aG haproxy recon_admin
+sudo systemctl restart haproxy
+```
+
 ## 3.2 Clone repository
 
 For `/opt` layout:

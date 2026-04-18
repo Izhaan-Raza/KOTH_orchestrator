@@ -4,8 +4,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 import logging
+from pathlib import Path
+import re
 import statistics
 import shlex
+import socket
 from threading import RLock
 import time
 from typing import Any
@@ -23,6 +26,8 @@ from ssh_client import SSHClientPool
 from webhook import fire_and_forget
 
 logger = logging.getLogger("koth.referee")
+PORT_BIND_RE = re.compile(r'^\s*-\s*"(?P<host>\d+):\d+(?:/\w+)?"')
+LISTEN_NAME_RE = re.compile(r"^listen\s+(\S+)")
 
 
 class RuntimeGuardError(RuntimeError):
@@ -42,6 +47,8 @@ class RefereeRuntime:
         self.enforcer = Enforcer(db)
         self.scheduler = BackgroundScheduler(timezone="UTC")
         self._lock = RLock()
+        self._series_port_cache: dict[int, tuple[int, ...]] = {}
+        self._haproxy_listener_cache: set[str] | None = None
 
     def start_scheduler(self) -> None:
         self.scheduler.start()
@@ -64,6 +71,11 @@ class RefereeRuntime:
                     run_at = datetime.now(UTC) + timedelta(seconds=SETTINGS.rotation_interval_seconds)
                     self.db.set_competition_state(next_rotation=run_at.isoformat())
                 self._enable_rotation_job(run_at=run_at)
+            self._sync_haproxy_active_series(int(state["current_series"]) or None)
+        elif state["status"] in {"paused", "rotating"} and int(state["current_series"]) > 0:
+            self._sync_haproxy_active_series(int(state["current_series"]))
+        elif state["status"] in {"stopped", "faulted", "stopping"}:
+            self._sync_haproxy_active_series(None)
 
     def shutdown(self) -> None:
         self.scheduler.shutdown(wait=False)
@@ -186,6 +198,105 @@ class RefereeRuntime:
                 host, ok, output = future.result()
                 results[host] = (ok, output)
         return results
+
+    def _series_compose_path(self, series: int) -> Path:
+        return Path(__file__).resolve().parents[1] / f"Series H{series}" / "docker-compose.yml"
+
+    def _series_public_ports(self, series: int) -> tuple[int, ...]:
+        cached = self._series_port_cache.get(series)
+        if cached is not None:
+            return cached
+        compose_path = self._series_compose_path(series)
+        ports: list[int] = []
+        if compose_path.is_file():
+            for raw_line in compose_path.read_text(encoding="utf-8").splitlines():
+                match = PORT_BIND_RE.match(raw_line)
+                if match:
+                    ports.append(int(match.group("host")))
+        resolved = tuple(sorted(set(ports)))
+        self._series_port_cache[series] = resolved
+        return resolved
+
+    def _haproxy_listeners(self) -> set[str]:
+        if self._haproxy_listener_cache is not None:
+            return self._haproxy_listener_cache
+        listeners: set[str] = set()
+        config_path = SETTINGS.haproxy_config_path
+        if config_path.is_file():
+            for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+                match = LISTEN_NAME_RE.match(raw_line.strip())
+                if match:
+                    listeners.add(match.group(1))
+        self._haproxy_listener_cache = listeners
+        return listeners
+
+    @staticmethod
+    def _haproxy_server_name(host: str) -> str | None:
+        try:
+            return f"n{SETTINGS.node_hosts.index(host) + 1}"
+        except ValueError:
+            return None
+
+    def _haproxy_socket_command(self, command: str) -> str:
+        socket_path = SETTINGS.haproxy_admin_socket_path
+        if not socket_path.exists():
+            return ""
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2.0)
+            client.connect(str(socket_path))
+            client.sendall((command.strip() + "\n").encode("utf-8"))
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    chunk = client.recv(4096)
+                except TimeoutError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks).decode("utf-8", errors="replace")
+
+    def _set_haproxy_series_state(
+        self,
+        *,
+        series: int,
+        state: str,
+        hosts: tuple[str, ...] | None = None,
+    ) -> None:
+        socket_path = SETTINGS.haproxy_admin_socket_path
+        if not socket_path.exists():
+            return
+        listener_names = self._haproxy_listeners()
+        target_hosts = hosts or SETTINGS.node_hosts
+        for port in self._series_public_ports(series):
+            backend = f"p{port}"
+            if backend not in listener_names:
+                continue
+            for host in target_hosts:
+                server_name = self._haproxy_server_name(host)
+                if not server_name:
+                    continue
+                try:
+                    self._haproxy_socket_command(f"set server {backend}/{server_name} state {state}")
+                except Exception as exc:
+                    log_structured(
+                        logger,
+                        logging.WARNING,
+                        "haproxy_state_sync_failed",
+                        series=series,
+                        backend=backend,
+                        host=host,
+                        state=state,
+                        error=str(exc),
+                    )
+
+    def _sync_haproxy_active_series(self, active_series: int | None) -> None:
+        socket_path = SETTINGS.haproxy_admin_socket_path
+        if not socket_path.exists():
+            return
+        for series in range(1, SETTINGS.total_series + 1):
+            state = "ready" if active_series and series == active_series else "maint"
+            self._set_haproxy_series_state(series=series, state=state)
 
     def _write_authoritative_owner_to_variant(
         self,
@@ -321,6 +432,7 @@ class RefereeRuntime:
             )
             validated_at = datetime.now(UTC).isoformat()
             self.db.set_competition_state(last_validated_series=1, last_validated_at=validated_at)
+            self._sync_haproxy_active_series(1)
             self._arm_rotation_from_now()
             fire_and_forget({"type": "competition_started", "series": 1})
 
@@ -339,6 +451,7 @@ class RefereeRuntime:
                 )
 
             self._disable_rotation_job()
+            self._sync_haproxy_active_series(None)
             self._post_final_scores(current_series)
 
             self.db.set_competition_state(
@@ -388,6 +501,7 @@ class RefereeRuntime:
                 last_validated_series=series,
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
+            self._sync_haproxy_active_series(series)
             self._arm_rotation_from_now()
             self.db.add_event(event_type="admin_action", severity="info", detail="Rotation resumed")
 
@@ -426,6 +540,7 @@ class RefereeRuntime:
                 last_validated_series=series,
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
+            self._sync_haproxy_active_series(series)
             self.db.add_event(
                 event_type="rotation",
                 severity="warning",
@@ -447,6 +562,8 @@ class RefereeRuntime:
                     previous_series=current_series,
                     fault_reason=None,
                 )
+                self._set_haproxy_series_state(series=target_series, state="maint")
+                self._set_haproxy_series_state(series=current_series, state="drain")
                 self._run_compose_parallel(
                     current_series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
                 )
@@ -456,6 +573,7 @@ class RefereeRuntime:
                     previous_series=None,
                     fault_reason=None,
                 )
+                self._set_haproxy_series_state(series=target_series, state="maint")
 
             try:
                 self._deploy_series_or_raise(series=target_series)
@@ -466,6 +584,7 @@ class RefereeRuntime:
                         self._deploy_series_or_raise(series=current_series)
                     except RuntimeGuardError as rollback_exc:
                         self._rollback_series_deploy(current_series)
+                        self._sync_haproxy_active_series(None)
                         self.db.set_competition_state(
                             status="faulted",
                             current_series=current_series,
@@ -493,6 +612,7 @@ class RefereeRuntime:
                             f"Rotation to H{target_series} failed; rollback to H{current_series} also failed"
                         ) from rollback_exc
 
+                    self._sync_haproxy_active_series(current_series)
                     self.db.set_competition_state(status="running", current_series=current_series)
                     self.db.set_competition_state(
                         previous_series=None,
@@ -517,6 +637,7 @@ class RefereeRuntime:
                     next_rotation=None,
                     fault_reason=f"Rotation to H{target_series} failed without a recoverable current series",
                 )
+                self._sync_haproxy_active_series(None)
                 self._disable_rotation_job()
                 self._log_event_and_webhook(
                     event_type="rotation",
@@ -536,6 +657,7 @@ class RefereeRuntime:
                 last_validated_series=target_series,
                 last_validated_at=datetime.now(UTC).isoformat(),
             )
+            self._sync_haproxy_active_series(target_series)
             self._arm_rotation_from_now()
             self.db.add_event(
                 event_type="rotation",
@@ -851,12 +973,14 @@ class RefereeRuntime:
 
             self.db.set_competition_state(status="rotating", previous_series=series, fault_reason=None)
             self._disable_rotation_job()
+            self._set_haproxy_series_state(series=series, state="maint")
             self._run_compose_parallel(
                 series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
             )
             try:
                 self._deploy_series_or_raise(series=series)
             except RuntimeGuardError as exc:
+                self._sync_haproxy_active_series(None)
                 self.db.set_competition_state(
                     status="faulted",
                     current_series=series,
@@ -883,6 +1007,7 @@ class RefereeRuntime:
                 last_validated_series=series,
                 last_validated_at=validated_at,
             )
+            self._sync_haproxy_active_series(series)
             self.db.add_event(
                 event_type="admin_action",
                 severity="info",
