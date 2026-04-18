@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import csv
+import io
+import json
+import os
 import re
+import socket
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -16,15 +21,21 @@ from config import SETTINGS
 from db import Database
 from models import (
     ClaimObservationResponse,
+    ContainerTelemetryResponse,
     EventResponse,
+    HostTelemetryResponse,
     LbServerResponse,
     LbServiceResponse,
     LbStatusResponse,
     LogTailResponse,
     RecoveryResponse,
+    RoutingServerResponse,
+    RoutingServiceResponse,
+    RoutingStatusResponse,
     RuntimeResponse,
     SkipRequest,
     StatusResponse,
+    TelemetryStatusResponse,
     TeamIn,
     TeamResponse,
     TeamStatusUpdateResponse,
@@ -292,6 +303,546 @@ def _lb_status() -> LbStatusResponse:
     )
 
 
+def _safe_int(value: str | None) -> int | None:
+    if value in {None, "", "-"}:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _safe_float(value: str | None) -> float | None:
+    if value in {None, "", "-"}:
+        return None
+    cleaned = str(value).strip().rstrip("%")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _parse_docker_timestamp(value: str | None) -> datetime | None:
+    if not value or value.startswith("0001-01-01T00:00:00"):
+        return None
+    normalized = value.replace("Z", "+00:00")
+    if "." in normalized:
+        head, rest = normalized.split(".", 1)
+        tz_index = max(rest.rfind("+"), rest.rfind("-"))
+        if tz_index > 0:
+            fractional = rest[:tz_index]
+            suffix = rest[tz_index:]
+        else:
+            fractional = rest
+            suffix = ""
+        normalized = f"{head}.{fractional[:6]}{suffix}"
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _duration_seconds(started_at: datetime | None, ended_at: datetime | None = None) -> int | None:
+    if started_at is None:
+        return None
+    endpoint = ended_at or datetime.now(UTC)
+    return max(0, int((endpoint - started_at).total_seconds()))
+
+
+def _run_local(command: list[str]) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return 1, "", str(exc)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _service_state(command_runner, service_name: str) -> str | None:
+    code, out, _ = command_runner(["systemctl", "is-active", service_name])
+    if code == 0:
+        return out.strip() or "active"
+    normalized = (out or "").strip()
+    return normalized or None
+
+
+def _collect_linux_host_metrics() -> dict[str, float | int | None]:
+    if os.name == "nt":
+        return {
+            "loadavg_1m": None,
+            "loadavg_5m": None,
+            "loadavg_15m": None,
+            "mem_used_mb": None,
+            "mem_total_mb": None,
+            "mem_percent": None,
+            "disk_used_gb": None,
+            "disk_total_gb": None,
+            "disk_percent": None,
+            "uptime_seconds": None,
+        }
+
+    load1 = load5 = load15 = None
+    try:
+        load1, load5, load15 = os.getloadavg()
+    except OSError:
+        pass
+
+    mem_total_kb = mem_available_kb = None
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("MemTotal:"):
+                    mem_total_kb = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    mem_available_kb = int(line.split()[1])
+    except OSError:
+        pass
+
+    mem_total_mb = mem_used_mb = None
+    mem_percent = None
+    if mem_total_kb and mem_available_kb is not None:
+        mem_total_mb = mem_total_kb // 1024
+        mem_used_mb = max(mem_total_kb - mem_available_kb, 0) // 1024
+        mem_percent = round(((mem_total_kb - mem_available_kb) * 100) / mem_total_kb, 1)
+
+    disk_total_gb = disk_used_gb = None
+    disk_percent = None
+    try:
+        fs = os.statvfs("/")
+        disk_total_gb = round((fs.f_blocks * fs.f_frsize) / (1024**3), 1)
+        disk_used_gb = round(((fs.f_blocks - fs.f_bavail) * fs.f_frsize) / (1024**3), 1)
+        if fs.f_blocks:
+            disk_percent = round(((fs.f_blocks - fs.f_bavail) * 100) / fs.f_blocks, 1)
+    except OSError:
+        pass
+
+    uptime_seconds = None
+    try:
+        with open("/proc/uptime", encoding="utf-8") as handle:
+            uptime_seconds = int(float(handle.read().split()[0]))
+    except OSError:
+        pass
+
+    return {
+        "loadavg_1m": load1,
+        "loadavg_5m": load5,
+        "loadavg_15m": load15,
+        "mem_used_mb": mem_used_mb,
+        "mem_total_mb": mem_total_mb,
+        "mem_percent": mem_percent,
+        "disk_used_gb": disk_used_gb,
+        "disk_total_gb": disk_total_gb,
+        "disk_percent": disk_percent,
+        "uptime_seconds": uptime_seconds,
+    }
+
+
+def _haproxy_socket_command(command: str) -> str:
+    socket_path = SETTINGS.haproxy_admin_socket_path
+    if not socket_path.exists():
+        return ""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(2.0)
+        client.connect(str(socket_path))
+        client.sendall(f"{command}\n".encode("utf-8"))
+        chunks: list[bytes] = []
+        while True:
+            data = client.recv(65536)
+            if not data:
+                break
+            chunks.append(data)
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def _haproxy_runtime_rows() -> list[dict[str, str]]:
+    try:
+        payload = _haproxy_socket_command("show stat")
+    except OSError as exc:
+        logger.warning("haproxy runtime stats unavailable: %s", exc)
+        return []
+    lines = [line for line in payload.splitlines() if line.strip()]
+    if not lines:
+        return []
+    header = None
+    data_lines: list[str] = []
+    for line in lines:
+        if line.startswith("#"):
+            header = line.lstrip("# ").strip()
+            continue
+        data_lines.append(line)
+    if not header or not data_lines:
+        return []
+    reader = csv.DictReader(io.StringIO("\n".join([header, *data_lines])))
+    return [dict(row) for row in reader]
+
+
+def _series_variant_ports(series: int) -> dict[int, str]:
+    try:
+        ports = tuple(runtime._series_public_ports(series))  # noqa: SLF001 - shared runtime helper
+    except Exception:
+        return {}
+    variants = ("A", "B", "C")
+    return {port: variants[index] for index, port in enumerate(ports[: len(variants)])}
+
+
+def _routing_status() -> RoutingStatusResponse:
+    competition = db.get_competition()
+    current_series = int(competition["current_series"])
+    services = _haproxy_services()
+    if not services:
+        return RoutingStatusResponse(
+            configured=False,
+            current_series=current_series,
+            services=[],
+            total_inbound_connections=0,
+            total_backend_connections=0,
+            note=f"HAProxy config not found at {HAPROXY_CONFIG_PATH}",
+        )
+
+    variant_map = _series_variant_ports(current_series) if current_series > 0 else {}
+    active_ports = set(variant_map)
+    stat_rows = _haproxy_runtime_rows()
+    stat_index = {(row.get("pxname"), row.get("svname")): row for row in stat_rows}
+
+    route_services: list[RoutingServiceResponse] = []
+    total_inbound = 0
+    total_backend = 0
+
+    for service in services:
+        bind_port = int(service["bind_port"])
+        if active_ports and bind_port not in active_ports:
+            continue
+
+        frontend_row = stat_index.get((service["name"], "FRONTEND"), {})
+        backend_row = stat_index.get((service["name"], "BACKEND"), {})
+        inbound_connections = _safe_int(frontend_row.get("scur")) or service.get("inbound_connections", 0)
+        backend_connections = _safe_int(backend_row.get("scur")) or 0
+
+        servers: list[RoutingServerResponse] = []
+        route_labels: list[str] = []
+        for server in service["servers"]:
+            row = stat_index.get((service["name"], server["name"]), {})
+            active_connections = _safe_int(row.get("scur")) or 0
+            status = row.get("status") or "unknown"
+            check_status = row.get("check_status") or row.get("check_desc")
+            last_change_seconds = _safe_int(row.get("lastchg"))
+            route_labels.append(f"{server['name']} {server['host']}:{server['port']} [{status}]")
+            servers.append(
+                RoutingServerResponse(
+                    name=str(server["name"]),
+                    host=str(server["host"]),
+                    port=int(server["port"]),
+                    status=status,
+                    check_status=check_status,
+                    active_connections=active_connections,
+                    last_change_seconds=last_change_seconds,
+                )
+            )
+        if not backend_connections:
+            backend_connections = sum(server.active_connections for server in servers)
+
+        total_inbound += inbound_connections
+        total_backend += backend_connections
+        route_services.append(
+            RoutingServiceResponse(
+                name=str(service["name"]),
+                bind_port=bind_port,
+                variant=variant_map.get(bind_port),
+                inbound_connections=inbound_connections,
+                backend_connections=backend_connections,
+                routing_text=" -> ".join(route_labels),
+                servers=servers,
+            )
+        )
+
+    note = None
+    if current_series <= 0:
+        note = "Competition is not active; routing is parked."
+    elif not route_services:
+        note = f"No active listener data found for H{current_series}."
+
+    return RoutingStatusResponse(
+        configured=True,
+        current_series=current_series,
+        services=route_services,
+        total_inbound_connections=total_inbound,
+        total_backend_connections=total_backend,
+        note=note,
+    )
+
+
+def _local_host_telemetry() -> HostTelemetryResponse:
+    metrics = _collect_linux_host_metrics()
+    docker_status = _service_state(_run_local, "docker")
+    haproxy_status = _service_state(_run_local, "haproxy")
+    referee_status = _service_state(_run_local, "koth-referee")
+    return HostTelemetryResponse(
+        host="192.168.0.12",
+        role="lb",
+        reachable=True,
+        loadavg_1m=metrics["loadavg_1m"],
+        loadavg_5m=metrics["loadavg_5m"],
+        loadavg_15m=metrics["loadavg_15m"],
+        mem_used_mb=metrics["mem_used_mb"],
+        mem_total_mb=metrics["mem_total_mb"],
+        mem_percent=metrics["mem_percent"],
+        disk_used_gb=metrics["disk_used_gb"],
+        disk_total_gb=metrics["disk_total_gb"],
+        disk_percent=metrics["disk_percent"],
+        uptime_seconds=metrics["uptime_seconds"],
+        docker_status=docker_status,
+        haproxy_status=haproxy_status,
+        referee_status=referee_status,
+        error=None,
+    )
+
+
+_REMOTE_HOST_METRICS_COMMAND = """python3 - <<'PY'
+import json, os
+
+data = {
+    "loadavg_1m": None,
+    "loadavg_5m": None,
+    "loadavg_15m": None,
+    "mem_used_mb": None,
+    "mem_total_mb": None,
+    "mem_percent": None,
+    "disk_used_gb": None,
+    "disk_total_gb": None,
+    "disk_percent": None,
+    "uptime_seconds": None,
+}
+try:
+    load1, load5, load15 = os.getloadavg()
+    data["loadavg_1m"] = load1
+    data["loadavg_5m"] = load5
+    data["loadavg_15m"] = load15
+except OSError:
+    pass
+try:
+    mem = {}
+    with open("/proc/meminfo", "r", encoding="utf-8") as handle:
+        for line in handle:
+            key, value = line.split(":", 1)
+            mem[key] = int(value.strip().split()[0])
+    total = mem.get("MemTotal")
+    available = mem.get("MemAvailable")
+    if total:
+        data["mem_total_mb"] = total // 1024
+        data["mem_used_mb"] = max(total - (available or 0), 0) // 1024
+        data["mem_percent"] = round(((total - (available or 0)) * 100) / total, 1)
+except OSError:
+    pass
+try:
+    stat = os.statvfs("/")
+    total = stat.f_blocks * stat.f_frsize
+    used = (stat.f_blocks - stat.f_bavail) * stat.f_frsize
+    data["disk_total_gb"] = round(total / (1024 ** 3), 1)
+    data["disk_used_gb"] = round(used / (1024 ** 3), 1)
+    if stat.f_blocks:
+        data["disk_percent"] = round(((stat.f_blocks - stat.f_bavail) * 100) / stat.f_blocks, 1)
+except OSError:
+    pass
+try:
+    with open("/proc/uptime", "r", encoding="utf-8") as handle:
+        data["uptime_seconds"] = int(float(handle.read().split()[0]))
+except OSError:
+    pass
+print(json.dumps(data))
+PY"""
+
+
+def _remote_host_telemetry(
+    host: str,
+    containers: list[dict],
+) -> tuple[HostTelemetryResponse, list[ContainerTelemetryResponse]]:
+    try:
+        metrics_code, metrics_out, metrics_err = ssh_pool.exec(host, _REMOTE_HOST_METRICS_COMMAND)
+    except Exception as exc:
+        error = str(exc)
+        return (
+            HostTelemetryResponse(
+                host=host,
+                role="node",
+                reachable=False,
+                loadavg_1m=None,
+                loadavg_5m=None,
+                loadavg_15m=None,
+                mem_used_mb=None,
+                mem_total_mb=None,
+                mem_percent=None,
+                disk_used_gb=None,
+                disk_total_gb=None,
+                disk_percent=None,
+                uptime_seconds=None,
+                docker_status=None,
+                haproxy_status=None,
+                referee_status=None,
+                error=error,
+            ),
+            [],
+        )
+
+    if metrics_code != 0:
+        error = metrics_err.strip() or "host metrics command failed"
+        return (
+            HostTelemetryResponse(
+                host=host,
+                role="node",
+                reachable=False,
+                loadavg_1m=None,
+                loadavg_5m=None,
+                loadavg_15m=None,
+                mem_used_mb=None,
+                mem_total_mb=None,
+                mem_percent=None,
+                disk_used_gb=None,
+                disk_total_gb=None,
+                disk_percent=None,
+                uptime_seconds=None,
+                docker_status=None,
+                haproxy_status=None,
+                referee_status=None,
+                error=error,
+            ),
+            [],
+        )
+
+    try:
+        metrics = json.loads(metrics_out or "{}")
+    except json.JSONDecodeError:
+        metrics = {}
+    container_names = [str(item["container_id"]) for item in containers]
+    stats_index: dict[str, dict] = {}
+    inspect_index: dict[str, dict] = {}
+
+    if container_names:
+        stats_command = (
+            "docker stats --no-stream --format '{{json .}}' " + " ".join(container_names)
+        )
+        inspect_command = "docker inspect " + " ".join(container_names)
+        stats_code, stats_out, stats_err = ssh_pool.exec(host, stats_command)
+        inspect_code, inspect_out, inspect_err = ssh_pool.exec(host, inspect_command)
+
+        if stats_code == 0:
+            for line in stats_out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                stats_index[payload.get("Name") or payload.get("Container") or ""] = payload
+        elif stats_err.strip():
+            logger.warning("docker stats failed on %s: %s", host, stats_err.strip())
+
+        if inspect_code == 0:
+            try:
+                for item in json.loads(inspect_out or "[]"):
+                    name = str(item.get("Name", "")).lstrip("/")
+                    if name:
+                        inspect_index[name] = item
+            except json.JSONDecodeError:
+                logger.warning("docker inspect returned non-json on %s", host)
+        elif inspect_err.strip():
+            logger.warning("docker inspect failed on %s: %s", host, inspect_err.strip())
+
+    telemetry: list[ContainerTelemetryResponse] = []
+    for item in containers:
+        name = str(item["container_id"])
+        stats = stats_index.get(name, {})
+        inspect = inspect_index.get(name, {})
+        state = inspect.get("State", {})
+        started_at_raw = state.get("StartedAt")
+        finished_at_raw = state.get("FinishedAt")
+        started_at = _parse_docker_timestamp(started_at_raw)
+        finished_at = _parse_docker_timestamp(finished_at_raw)
+        status = state.get("Status") or item["status"]
+        telemetry.append(
+            ContainerTelemetryResponse(
+                machine_host=host,
+                variant=str(item["variant"]),
+                container_id=name,
+                series=int(item["series"]),
+                status=str(status),
+                health=((state.get("Health") or {}).get("Status")),
+                king=item.get("king"),
+                cpu_percent=_safe_float(stats.get("CPUPerc")),
+                memory_usage=stats.get("MemUsage"),
+                memory_percent=_safe_float(stats.get("MemPerc")),
+                pids=_safe_int(stats.get("PIDs")),
+                restart_count=int(inspect.get("RestartCount", 0)) if inspect else None,
+                started_at=started_at_raw,
+                finished_at=finished_at_raw,
+                exit_code=int(state.get("ExitCode")) if state.get("ExitCode") is not None else None,
+                oom_killed=state.get("OOMKilled"),
+                uptime_seconds=_duration_seconds(started_at) if state.get("Running") else None,
+                downtime_seconds=(
+                    _duration_seconds(finished_at)
+                    if finished_at and not state.get("Running")
+                    else (
+                        max(0, int((started_at - finished_at).total_seconds()))
+                        if started_at and finished_at and state.get("Running")
+                        else None
+                    )
+                ),
+                error=state.get("Error") or None,
+            )
+        )
+
+    host_response = HostTelemetryResponse(
+        host=host,
+        role="node",
+        reachable=True,
+        loadavg_1m=metrics.get("loadavg_1m"),
+        loadavg_5m=metrics.get("loadavg_5m"),
+        loadavg_15m=metrics.get("loadavg_15m"),
+        mem_used_mb=metrics.get("mem_used_mb"),
+        mem_total_mb=metrics.get("mem_total_mb"),
+        mem_percent=metrics.get("mem_percent"),
+        disk_used_gb=metrics.get("disk_used_gb"),
+        disk_total_gb=metrics.get("disk_total_gb"),
+        disk_percent=metrics.get("disk_percent"),
+        uptime_seconds=metrics.get("uptime_seconds"),
+        docker_status="active",
+        haproxy_status=None,
+        referee_status=None,
+        error=None,
+    )
+    return host_response, telemetry
+
+
+def _telemetry_status() -> TelemetryStatusResponse:
+    competition = db.get_competition()
+    current_series = int(competition["current_series"])
+    containers = db.list_containers(
+        series=current_series if current_series > 0 else None,
+        machine_hosts=SETTINGS.node_hosts,
+    )
+    containers_by_host: dict[str, list[dict]] = {host: [] for host in SETTINGS.node_hosts}
+    for item in containers:
+        containers_by_host.setdefault(str(item["machine_host"]), []).append(item)
+
+    hosts: list[HostTelemetryResponse] = [_local_host_telemetry()]
+    container_rows: list[ContainerTelemetryResponse] = []
+    for host in SETTINGS.node_hosts:
+        host_metrics, host_containers = _remote_host_telemetry(host, containers_by_host.get(host, []))
+        hosts.append(host_metrics)
+        container_rows.extend(host_containers)
+
+    note = None
+    if current_series <= 0:
+        note = "Competition is stopped; container telemetry reflects the most recent known state."
+
+    return TelemetryStatusResponse(
+        current_series=current_series,
+        generated_at=datetime.now(UTC),
+        hosts=hosts,
+        containers=sorted(container_rows, key=lambda item: (item.machine_host, item.variant)),
+        note=note,
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {"request": request})
@@ -358,6 +909,16 @@ def api_runtime() -> RuntimeResponse:
 @app.get("/api/lb", response_model=LbStatusResponse, dependencies=[Depends(require_admin_api_key)])
 def api_lb_status() -> LbStatusResponse:
     return _lb_status()
+
+
+@app.get("/api/routing", response_model=RoutingStatusResponse, dependencies=[Depends(require_admin_api_key)])
+def api_routing_status() -> RoutingStatusResponse:
+    return _routing_status()
+
+
+@app.get("/api/telemetry", response_model=TelemetryStatusResponse, dependencies=[Depends(require_admin_api_key)])
+def api_telemetry_status() -> TelemetryStatusResponse:
+    return _telemetry_status()
 
 
 def _tail_log(path: Path, *, source: str, lines: int) -> LogTailResponse:

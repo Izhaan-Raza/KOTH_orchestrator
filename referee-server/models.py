@@ -81,6 +81,85 @@ class LbStatusResponse(BaseModel):
     note: str | None = None
 
 
+class RoutingServerResponse(BaseModel):
+    name: str
+    host: str
+    port: int
+    status: str | None
+    check_status: str | None
+    active_connections: int
+    last_change_seconds: int | None
+
+
+class RoutingServiceResponse(BaseModel):
+    name: str
+    bind_port: int
+    variant: Literal["A", "B", "C"] | None
+    inbound_connections: int
+    backend_connections: int
+    routing_text: str
+    servers: list[RoutingServerResponse]
+
+
+class RoutingStatusResponse(BaseModel):
+    configured: bool
+    current_series: int
+    services: list[RoutingServiceResponse]
+    total_inbound_connections: int
+    total_backend_connections: int
+    note: str | None = None
+
+
+class HostTelemetryResponse(BaseModel):
+    host: str
+    role: Literal["lb", "node"]
+    reachable: bool
+    loadavg_1m: float | None
+    loadavg_5m: float | None
+    loadavg_15m: float | None
+    mem_used_mb: int | None
+    mem_total_mb: int | None
+    mem_percent: float | None
+    disk_used_gb: float | None
+    disk_total_gb: float | None
+    disk_percent: float | None
+    uptime_seconds: int | None
+    docker_status: str | None
+    haproxy_status: str | None
+    referee_status: str | None
+    error: str | None = None
+
+
+class ContainerTelemetryResponse(BaseModel):
+    machine_host: str
+    variant: Literal["A", "B", "C"]
+    container_id: str
+    series: int
+    status: str
+    health: str | None
+    king: str | None
+    cpu_percent: float | None
+    memory_usage: str | None
+    memory_percent: float | None
+    pids: int | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    exit_code: int | None
+    oom_killed: bool | None
+    uptime_seconds: int | None
+    downtime_seconds: int | None
+    error: str | None = None
+
+
+class TelemetryStatusResponse(BaseModel):
+    current_series: int
+    generated_at: datetime
+    hosts: list[HostTelemetryResponse]
+    containers: list[ContainerTelemetryResponse]
+    note: str | None = None
+
+
 class ValidationResponse(BaseModel):
     current_series: int
     valid: bool

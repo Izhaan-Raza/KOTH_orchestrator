@@ -1090,6 +1090,122 @@ backend h1a_nodes
         response = self.client.get("/api/lb")
         self.assertEqual(response.status_code, 401)
 
+    def test_routing_and_telemetry_endpoints_require_admin_key(self) -> None:
+        self.assertEqual(self.client.get("/api/routing").status_code, 401)
+        self.assertEqual(self.client.get("/api/telemetry").status_code, 401)
+
+    def test_routing_endpoint_returns_active_listener_view(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        payload = self.app_module.RoutingStatusResponse(
+            configured=True,
+            current_series=6,
+            services=[
+                self.app_module.RoutingServiceResponse(
+                    name="p10050",
+                    bind_port=10050,
+                    variant="A",
+                    inbound_connections=12,
+                    backend_connections=9,
+                    routing_text="n1 192.168.0.70:10050 [UP] -> n2 192.168.0.103:10050 [UP]",
+                    servers=[
+                        self.app_module.RoutingServerResponse(
+                            name="n1",
+                            host="192.168.0.70",
+                            port=10050,
+                            status="UP",
+                            check_status="L4OK",
+                            active_connections=5,
+                            last_change_seconds=12,
+                        ),
+                        self.app_module.RoutingServerResponse(
+                            name="n2",
+                            host="192.168.0.103",
+                            port=10050,
+                            status="UP",
+                            check_status="L4OK",
+                            active_connections=4,
+                            last_change_seconds=12,
+                        ),
+                    ],
+                )
+            ],
+            total_inbound_connections=12,
+            total_backend_connections=9,
+            note=None,
+        )
+
+        with patch.object(self.app_module, "_routing_status", return_value=payload):
+            response = self.client.get("/api/routing")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["current_series"], 6)
+        self.assertEqual(body["services"][0]["variant"], "A")
+        self.assertEqual(body["services"][0]["servers"][0]["status"], "UP")
+
+    def test_telemetry_endpoint_returns_host_and_container_data(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        payload = self.app_module.TelemetryStatusResponse(
+            current_series=2,
+            generated_at=datetime.now(UTC),
+            hosts=[
+                self.app_module.HostTelemetryResponse(
+                    host="192.168.0.12",
+                    role="lb",
+                    reachable=True,
+                    loadavg_1m=0.15,
+                    loadavg_5m=0.20,
+                    loadavg_15m=0.25,
+                    mem_used_mb=1024,
+                    mem_total_mb=4096,
+                    mem_percent=25.0,
+                    disk_used_gb=40.0,
+                    disk_total_gb=128.0,
+                    disk_percent=31.3,
+                    uptime_seconds=3600,
+                    docker_status="active",
+                    haproxy_status="active",
+                    referee_status="active",
+                    error=None,
+                )
+            ],
+            containers=[
+                self.app_module.ContainerTelemetryResponse(
+                    machine_host="192.168.0.70",
+                    variant="A",
+                    container_id="H2A_Node1",
+                    series=2,
+                    status="running",
+                    health="healthy",
+                    king="Team Alpha",
+                    cpu_percent=1.2,
+                    memory_usage="12MiB / 4GiB",
+                    memory_percent=0.3,
+                    pids=7,
+                    restart_count=1,
+                    started_at="2026-04-18T12:00:00Z",
+                    finished_at=None,
+                    exit_code=0,
+                    oom_killed=False,
+                    uptime_seconds=120,
+                    downtime_seconds=8,
+                    error=None,
+                )
+            ],
+            note=None,
+        )
+
+        with patch.object(self.app_module, "_telemetry_status", return_value=payload):
+            response = self.client.get("/api/telemetry")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["current_series"], 2)
+        self.assertEqual(body["hosts"][0]["haproxy_status"], "active")
+        self.assertEqual(body["containers"][0]["container_id"], "H2A_Node1")
+
     def test_logs_and_claims_endpoints_require_admin_key(self) -> None:
         self.assertEqual(self.client.get("/api/logs/referee").status_code, 401)
         self.assertEqual(self.client.get("/api/logs/haproxy").status_code, 401)

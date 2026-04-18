@@ -143,53 +143,39 @@
       <section class="live-column">
         <article class="panel">
           <header class="panel-head">
-            <h2>Load Balancer</h2>
-            <p>Current listener pressure and backend distribution.</p>
+            <h2>Traffic Routing</h2>
+            <p>Live HAProxy view of where active series traffic is actually being sent.</p>
           </header>
           <div class="lb-summary">
-            <div><span>Services</span><strong id="lbServices">0</strong></div>
+            <div><span>Listeners</span><strong id="lbServices">0</strong></div>
             <div><span>Inbound</span><strong id="lbInbound">0</strong></div>
             <div><span>Backend</span><strong id="lbBackend">0</strong></div>
           </div>
-          <div class="lb-layout">
-            <div class="subpanel">
-              <div class="subpanel-head">
-                <span class="group-label">Node Load</span>
-                <p>Aggregated backend connections per node.</p>
-              </div>
-              <div class="graph-wrap">
-                <canvas id="lbGraph" class="load-graph" aria-label="Node load graph"></canvas>
-              </div>
-              <div id="lbNodes" class="node-loads"></div>
-            </div>
-            <div class="subpanel">
-              <div class="subpanel-head">
-                <span class="group-label">Listener Detail</span>
-                <p>Per-service breakdown.</p>
-              </div>
-              <div class="table-wrap short">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Listener</th>
-                      <th>Port</th>
-                      <th>Inbound</th>
-                      <th>Backend</th>
-                      <th>Distribution</th>
-                    </tr>
-                  </thead>
-                  <tbody id="lbTable"></tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          <div class="routing-grid" id="routingGrid"></div>
           <p id="lbNote" class="hint"></p>
         </article>
 
         <article class="panel">
           <header class="panel-head">
-            <h2>Container State</h2>
-            <p>Observed replicas from the latest poll cycle.</p>
+            <h2>Infrastructure</h2>
+            <p>Host load, service state, and Docker churn for the active series.</p>
+          </header>
+          <div id="hostGrid" class="host-grid"></div>
+          <p id="telemetryNote" class="hint"></p>
+        </article>
+
+        <article class="panel">
+          <header class="panel-head">
+            <h2>Container Telemetry</h2>
+            <p>CPU, memory, restarts, health, and recent exit data per replica.</p>
+          </header>
+          <div id="containerTelemetry" class="container-grid"></div>
+        </article>
+
+        <article class="panel">
+          <header class="panel-head">
+            <h2>Observed State</h2>
+            <p>Latest referee poll view of ownership and replica status.</p>
           </header>
           <div class="table-wrap medium">
             <table>
@@ -400,6 +386,7 @@
         'healthy',
         'running',
         'active',
+        'up',
         'valid',
         'clear',
         'info',
@@ -414,6 +401,8 @@
         'stopping',
         'rotating',
         'degraded',
+        'maint',
+        'drain',
       ].includes(normalized)) {
         return 'warning';
       }
@@ -423,6 +412,7 @@
         'faulted',
         'banned',
         'invalid',
+        'down',
       ].includes(normalized)) {
         return 'critical';
       }
@@ -434,85 +424,20 @@
       return tone ? `tone-${tone}` : '';
     }
 
-    function loadTone(value, peak) {
-      if (!peak || value <= 0) {
-        return '';
+    function formatDuration(totalSeconds) {
+      if (totalSeconds === null || totalSeconds === undefined || Number.isNaN(Number(totalSeconds))) {
+        return 'n/a';
       }
-      if (value >= peak) {
-        return 'critical';
+      const seconds = Math.max(0, Number(totalSeconds));
+      if (seconds < 60) {
+        return `${seconds}s`;
       }
-      if (value >= peak * 0.6) {
-        return 'warning';
+      if (seconds < 3600) {
+        return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
       }
-      return 'ok';
-    }
-
-    function drawLbGraph(entries) {
-      const canvas = document.getElementById('lbGraph');
-      const width = canvas.clientWidth || 320;
-      const height = canvas.clientHeight || 170;
-      const ratio = window.devicePixelRatio || 1;
-
-      canvas.width = Math.floor(width * ratio);
-      canvas.height = Math.floor(height * ratio);
-
-      const ctx = canvas.getContext('2d');
-      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-      ctx.clearRect(0, 0, width, height);
-      ctx.fillStyle = '#050505';
-      ctx.fillRect(0, 0, width, height);
-
-      if (!entries.length) {
-        ctx.strokeStyle = '#1f1f1f';
-        ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
-        ctx.fillStyle = '#7f7f7f';
-        ctx.font = '12px Inter, sans-serif';
-        ctx.fillText('No backend load', 12, 22);
-        return;
-      }
-
-      const maxValue = Math.max(...entries.map(([, value]) => value), 1);
-      const leftPad = 12;
-      const rightPad = 12;
-      const topPad = 14;
-      const bottomPad = 24;
-      const chartWidth = width - leftPad - rightPad;
-      const chartHeight = height - topPad - bottomPad;
-      const slotWidth = chartWidth / entries.length;
-      const barWidth = Math.max(18, slotWidth - 12);
-
-      ctx.strokeStyle = '#1f1f1f';
-      ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
-      ctx.strokeStyle = '#181818';
-      for (let line = 1; line <= 3; line += 1) {
-        const y = topPad + (chartHeight / 4) * line;
-        ctx.beginPath();
-        ctx.moveTo(leftPad, y);
-        ctx.lineTo(width - rightPad, y);
-        ctx.stroke();
-      }
-
-      entries.forEach(([label, value], index) => {
-        const x = leftPad + slotWidth * index + (slotWidth - barWidth) / 2;
-        const barHeight = (value / maxValue) * (chartHeight - 6);
-        const y = topPad + chartHeight - barHeight;
-        const tone = loadTone(value, maxValue);
-
-        ctx.fillStyle =
-          tone === 'critical' ? '#b33a3a' :
-          tone === 'warning' ? '#b08a2b' :
-          tone === 'ok' ? '#2d8f52' :
-          '#ffffff';
-        ctx.fillRect(x, y, barWidth, barHeight);
-
-        ctx.fillStyle = '#f3f3f3';
-        ctx.font = '600 12px Inter, sans-serif';
-        ctx.fillText(String(value), x, Math.max(12, y - 4));
-
-        ctx.fillStyle = '#8d8d8d';
-        ctx.font = '11px Inter, sans-serif';
-        ctx.fillText(label.replace(/^.*@/, ''), x, height - 8);
-      });
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      return `${hours}h ${minutes}m`;
     }
 
     function renderRuntime(status, runtime) {
@@ -624,54 +549,103 @@
       element.textContent = payload.lines.length ? payload.lines.join('\n') : '(no log lines)';
     }
 
-    function renderLb(lb) {
-      document.getElementById('lbServices').textContent = lb.services.length;
-      document.getElementById('lbInbound').textContent = lb.total_inbound_connections;
-      document.getElementById('lbBackend').textContent = lb.total_backend_connections;
-      document.getElementById('lbNote').textContent = lb.note || '';
+    function renderRouting(routing) {
+      document.getElementById('lbServices').textContent = routing.services.length;
+      document.getElementById('lbInbound').textContent = routing.total_inbound_connections;
+      document.getElementById('lbBackend').textContent = routing.total_backend_connections;
+      document.getElementById('lbNote').textContent = routing.note || '';
 
-      const nodeTotals = {};
-      lb.services.forEach(service => {
-        service.servers.forEach(server => {
-          nodeTotals[server.host] = (nodeTotals[server.host] || 0) + server.active_connections;
-        });
-      });
-
-      const nodeEntries = Object.entries(nodeTotals)
-        .sort((a, b) => b[1] - a[1])
-      const peakNodeLoad = nodeEntries.length ? nodeEntries[0][1] : 0;
-
-      document.getElementById('lbNodes').innerHTML = nodeEntries
-        .map(([host, count]) => `
-          <div class="node-card ${pillToneClass(loadTone(count, peakNodeLoad))}">
-            <span>${escapeHtml(host)}</span>
-            <strong>${count}</strong>
-          </div>
-        `)
-        .join('');
-
-      drawLbGraph(nodeEntries);
-
-      document.getElementById('lbTable').innerHTML = lb.services
-        .sort((a, b) => b.backend_connections - a.backend_connections || a.bind_port - b.bind_port)
+      document.getElementById('routingGrid').innerHTML = routing.services
+        .sort((a, b) => a.bind_port - b.bind_port)
         .map(service => `
-          <tr>
-            <td>${escapeHtml(service.name)}</td>
-            <td>${service.bind_port}</td>
-            <td>${service.inbound_connections}</td>
-            <td>${service.backend_connections}</td>
-            <td class="distribution">
+          <article class="route-card">
+            <div class="route-head">
+              <div>
+                <span class="group-label">${escapeHtml(service.variant ? `Variant ${service.variant}` : service.name)}</span>
+                <strong class="route-title">${escapeHtml(service.name)} on :${service.bind_port}</strong>
+              </div>
+              <span class="pill ${pillToneClass(service.backend_connections > 0 ? 'active' : 'warning')}">
+                backend ${service.backend_connections}
+              </span>
+            </div>
+            <dl class="route-metrics">
+              <div><dt>Inbound</dt><dd>${service.inbound_connections}</dd></div>
+              <div><dt>Backend</dt><dd>${service.backend_connections}</dd></div>
+              <div><dt>Path</dt><dd>${escapeHtml(service.routing_text)}</dd></div>
+            </dl>
+            <div class="route-servers">
               ${service.servers.map(server => `
-                <div class="dist-row">
+                <div class="route-server-row">
                   <span class="mono">${escapeHtml(server.name)}</span>
                   <span>${escapeHtml(server.host)}:${server.port}</span>
-                  <strong>${server.active_connections}</strong>
+                  <span class="pill ${pillToneClass(server.status)}">${escapeHtml(server.status || 'unknown')}</span>
+                  <span>${server.active_connections} conn</span>
+                  <span>${server.last_change_seconds !== null && server.last_change_seconds !== undefined ? `${server.last_change_seconds}s since change` : 'no timer'}</span>
                 </div>
               `).join('')}
-            </td>
-          </tr>
+            </div>
+          </article>
         `)
-        .join('');
+        .join('') || '<p class="hint">No active listeners for the current series.</p>';
+    }
+
+    function renderTelemetry(telemetry) {
+      document.getElementById('telemetryNote').textContent = telemetry.note || '';
+
+      document.getElementById('hostGrid').innerHTML = telemetry.hosts.map(host => `
+        <article class="host-card ${host.reachable ? '' : 'host-card-error'}">
+          <div class="route-head">
+            <div>
+              <span class="group-label">${escapeHtml(host.role.toUpperCase())}</span>
+              <strong class="route-title">${escapeHtml(host.host)}</strong>
+            </div>
+            <span class="pill ${pillToneClass(host.reachable ? 'running' : 'critical')}">
+              ${host.reachable ? 'reachable' : 'unreachable'}
+            </span>
+          </div>
+          <dl class="route-metrics">
+            <div><dt>Load</dt><dd>${textOrFallback(host.loadavg_1m, 'n/a')} / ${textOrFallback(host.loadavg_5m, 'n/a')} / ${textOrFallback(host.loadavg_15m, 'n/a')}</dd></div>
+            <div><dt>Memory</dt><dd>${host.mem_used_mb !== null && host.mem_total_mb !== null ? `${host.mem_used_mb}MB / ${host.mem_total_mb}MB (${textOrFallback(host.mem_percent, 'n/a')}%)` : 'n/a'}</dd></div>
+            <div><dt>Disk</dt><dd>${host.disk_used_gb !== null && host.disk_total_gb !== null ? `${host.disk_used_gb}GB / ${host.disk_total_gb}GB (${textOrFallback(host.disk_percent, 'n/a')}%)` : 'n/a'}</dd></div>
+            <div><dt>Uptime</dt><dd>${formatDuration(host.uptime_seconds)}</dd></div>
+          </dl>
+          <div class="service-pills">
+            ${host.docker_status ? `<span class="pill ${pillToneClass(host.docker_status)}">docker ${escapeHtml(host.docker_status)}</span>` : ''}
+            ${host.haproxy_status ? `<span class="pill ${pillToneClass(host.haproxy_status)}">haproxy ${escapeHtml(host.haproxy_status)}</span>` : ''}
+            ${host.referee_status ? `<span class="pill ${pillToneClass(host.referee_status)}">referee ${escapeHtml(host.referee_status)}</span>` : ''}
+          </div>
+          ${host.error ? `<p class="hint tone-critical">${escapeHtml(host.error)}</p>` : ''}
+        </article>
+      `).join('');
+
+      document.getElementById('containerTelemetry').innerHTML = telemetry.containers.map(container => `
+        <article class="telemetry-card">
+          <div class="route-head">
+            <div>
+              <span class="group-label">${escapeHtml(container.machine_host)} / ${escapeHtml(container.variant)}</span>
+              <strong class="route-title">${escapeHtml(container.container_id)}</strong>
+            </div>
+            <span class="pill ${pillToneClass(container.health || container.status)}">
+              ${escapeHtml(container.health || container.status)}
+            </span>
+          </div>
+          <dl class="kv-list">
+            <div><dt>CPU</dt><dd>${container.cpu_percent !== null && container.cpu_percent !== undefined ? `${container.cpu_percent.toFixed(2)}%` : 'n/a'}</dd></div>
+            <div><dt>Memory</dt><dd>${escapeHtml(container.memory_usage || 'n/a')}</dd></div>
+            <div><dt>Mem %</dt><dd>${container.memory_percent !== null && container.memory_percent !== undefined ? `${container.memory_percent.toFixed(2)}%` : 'n/a'}</dd></div>
+            <div><dt>PIDs</dt><dd>${textOrFallback(container.pids, 'n/a')}</dd></div>
+            <div><dt>Restarts</dt><dd>${textOrFallback(container.restart_count, '0')}</dd></div>
+            <div><dt>Uptime</dt><dd>${formatDuration(container.uptime_seconds)}</dd></div>
+            <div><dt>Downtime</dt><dd>${formatDuration(container.downtime_seconds)}</dd></div>
+            <div><dt>Last Exit</dt><dd>${container.exit_code !== null && container.exit_code !== undefined ? container.exit_code : 'n/a'}</dd></div>
+            <div><dt>OOM</dt><dd>${container.oom_killed === true ? 'yes' : container.oom_killed === false ? 'no' : 'n/a'}</dd></div>
+            <div><dt>King</dt><dd>${escapeHtml(textOrFallback(container.king))}</dd></div>
+          </dl>
+          ${container.started_at ? `<p class="hint">started ${escapeHtml(formatTimestamp(container.started_at))}</p>` : ''}
+          ${container.finished_at && container.finished_at !== '0001-01-01T00:00:00Z' ? `<p class="hint">last exit ${escapeHtml(formatTimestamp(container.finished_at))}</p>` : ''}
+          ${container.error ? `<p class="hint tone-critical">${escapeHtml(container.error)}</p>` : ''}
+        </article>
+      `).join('') || '<p class="hint">No container telemetry available.</p>';
     }
 
     async function runAction(action) {
@@ -731,12 +705,13 @@
           logAction('enter the admin API key to load runtime data');
           return;
         }
-        const [status, runtime, teams, events, lb, claims, refereeLog, haproxyLog] = await Promise.all([
+        const [status, runtime, teams, events, routing, telemetry, claims, refereeLog, haproxyLog] = await Promise.all([
           getJson('/api/status'),
           getJson('/api/runtime'),
           getJson('/api/teams'),
           getJson('/api/events?limit=40'),
-          getJson('/api/lb'),
+          getJson('/api/routing'),
+          getJson('/api/telemetry'),
           getJson('/api/claims?limit=30'),
           getJson('/api/logs/referee?lines=60'),
           getJson('/api/logs/haproxy?lines=60'),
@@ -745,7 +720,8 @@
         renderTeams(teams);
         renderContainers(status.containers);
         renderEvents(events);
-        renderLb(lb);
+        renderRouting(routing);
+        renderTelemetry(telemetry);
         renderClaims(claims);
         renderLogBox('refereeLog', refereeLog);
         renderLogBox('haproxyLog', haproxyLog);
