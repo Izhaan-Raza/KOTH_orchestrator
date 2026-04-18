@@ -291,6 +291,37 @@ fi;
             return None
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def stable_ports_signature(cls, raw: str) -> str | None:
+        if not raw:
+            return None
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        if not lines:
+            return None
+
+        normalized_entries: list[str] = []
+        for line in lines:
+            if line.lower().startswith("state "):
+                continue
+            parts = re.split(r"\s+", line)
+            if len(parts) < 4:
+                continue
+            local = parts[3]
+            host, sep, port = local.rpartition(":")
+            if not sep or not port:
+                continue
+            host = host.strip("[]")
+            if host == "::ffff:127.0.0.1":
+                host = "127.0.0.1"
+            if host == "127.0.0.11":
+                continue
+            normalized_entries.append(f"{host}:{port}")
+
+        if not normalized_entries:
+            return None
+        normalized = "\n".join(sorted(set(normalized_entries)))
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
     def run_cycle(
         self,
         *,

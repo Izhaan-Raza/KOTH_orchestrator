@@ -907,6 +907,32 @@ class PollerCompletenessTests(unittest.TestCase):
     def test_normalize_king_strips_inline_section_marker(self) -> None:
         self.assertEqual(Poller._normalize_king("unclaimed===KING_STAT==="), "unclaimed")
 
+    def test_stable_ports_signature_ignores_docker_dns_stub_port(self) -> None:
+        poller = Poller(DummySSH())
+        first = """State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+LISTEN 0 4096 127.0.0.11:38271 0.0.0.0:*
+LISTEN 0 1 [::ffff:127.0.0.1]:8005 *:*
+LISTEN 0 100 *:8080 *:*
+"""
+        second = """State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+LISTEN 0 4096 127.0.0.11:46209 0.0.0.0:*
+LISTEN 0 100 *:8080 *:*
+LISTEN 0 1 [::ffff:127.0.0.1]:8005 *:*
+"""
+        changed = """State  Recv-Q Send-Q Local Address:Port Peer Address:Port
+LISTEN 0 4096 127.0.0.11:46209 0.0.0.0:*
+LISTEN 0 100 *:8081 *:*
+LISTEN 0 1 [::ffff:127.0.0.1]:8005 *:*
+"""
+        self.assertEqual(
+            poller.stable_ports_signature(first),
+            poller.stable_ports_signature(second),
+        )
+        self.assertNotEqual(
+            poller.stable_ports_signature(first),
+            poller.stable_ports_signature(changed),
+        )
+
 
 class ConfigLoadingTests(unittest.TestCase):
     def test_dotenv_is_loaded_from_module_directory(self) -> None:

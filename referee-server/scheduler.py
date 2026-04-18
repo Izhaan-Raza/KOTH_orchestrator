@@ -836,7 +836,7 @@ class RefereeRuntime:
             shadow_hash = self.poller.extract_sha256_or_missing(snap.sections.get("SHADOW", ""))
             authkeys_hash = self.poller.extract_sha256_or_missing(snap.sections.get("AUTHKEYS", ""))
             iptables_sig = self.poller.stable_signature(snap.sections.get("IPTABLES", ""))
-            ports_sig = self.poller.stable_signature(snap.sections.get("PORTS", ""))
+            ports_sig = self.poller.stable_ports_signature(snap.sections.get("PORTS", ""))
             self.db.upsert_baseline(
                 machine_host=snap.node_host,
                 variant=snap.variant,
@@ -1181,7 +1181,7 @@ class RefereeRuntime:
             shadow_hash = self.poller.extract_sha256_or_missing(snap.sections.get("SHADOW", ""))
             authkeys_hash = self.poller.extract_sha256_or_missing(snap.sections.get("AUTHKEYS", ""))
             iptables_sig = self.poller.stable_signature(snap.sections.get("IPTABLES", ""))
-            ports_sig = self.poller.stable_signature(snap.sections.get("PORTS", ""))
+            ports_sig = self.poller.stable_ports_signature(snap.sections.get("PORTS", ""))
 
             key = (snap.node_host, snap.variant)
             hits: list[ViolationHit] = []
