@@ -238,44 +238,62 @@
                 <div id="healthBrief" class="summary-list"></div>
               </article>
 
-              <article class="panel">
-                <header class="panel-head">
-                  <h2>Infrastructure</h2>
-                  <p>LB and node health, system load, and service state.</p>
-                </header>
-                <div id="hostGrid" class="host-grid"></div>
-                <p id="telemetryNote" class="hint"></p>
-              </article>
+              <div class="health-grid">
+                <article class="panel">
+                  <header class="panel-head">
+                    <h2>Infrastructure</h2>
+                    <p>LB and node health, system load, and service state.</p>
+                  </header>
+                  <div id="hostGrid" class="host-grid"></div>
+                  <p id="telemetryNote" class="hint"></p>
+                </article>
 
-              <article class="panel">
-                <header class="panel-head">
-                  <h2>Container Telemetry</h2>
-                  <p>CPU, memory, restart history, and last exit data.</p>
-                </header>
-                <div id="containerTelemetry" class="container-grid"></div>
-              </article>
+                <article class="panel">
+                  <header class="panel-head">
+                    <h2>Observed Replica State</h2>
+                    <p>What the referee saw in the latest poll cycle.</p>
+                  </header>
+                  <div class="table-wrap compact">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Node</th>
+                          <th>Variant</th>
+                          <th>Status</th>
+                          <th>Container</th>
+                          <th>King</th>
+                          <th>Series</th>
+                        </tr>
+                      </thead>
+                      <tbody id="containersTable"></tbody>
+                    </table>
+                  </div>
+                </article>
 
-              <article class="panel">
-                <header class="panel-head">
-                  <h2>Observed Replica State</h2>
-                  <p>What the referee saw in the latest poll cycle.</p>
-                </header>
-                <div class="table-wrap medium">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Node</th>
-                        <th>Variant</th>
-                        <th>Status</th>
-                        <th>Container</th>
-                        <th>King</th>
-                        <th>Series</th>
-                      </tr>
-                    </thead>
-                    <tbody id="containersTable"></tbody>
-                  </table>
-                </div>
-              </article>
+                <article class="panel health-span">
+                  <header class="panel-head">
+                    <h2>Container Telemetry</h2>
+                    <p>CPU, memory, restart history, and last exit data.</p>
+                  </header>
+                  <div class="table-wrap compact">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Replica</th>
+                          <th>Health</th>
+                          <th>CPU</th>
+                          <th>Memory</th>
+                          <th>PIDs</th>
+                          <th>Restarts</th>
+                          <th>Uptime</th>
+                          <th>Last Exit</th>
+                        </tr>
+                      </thead>
+                      <tbody id="containerTelemetryTable"></tbody>
+                    </table>
+                  </div>
+                </article>
+              </div>
             </div>
           </section>
 
@@ -287,13 +305,13 @@
               </header>
               <div id="logsBrief" class="summary-list"></div>
             </article>
-            <div class="two-col-grid">
+            <div class="logs-grid">
               <article class="panel">
                 <header class="panel-head">
                   <h2>Claim Trace</h2>
                   <p>Per-poll claims and why a winner was or was not selected.</p>
                 </header>
-                <div class="table-wrap tall">
+                <div class="table-wrap medium">
                   <table>
                     <thead>
                       <tr>
@@ -310,21 +328,23 @@
                 </div>
               </article>
 
-              <article class="panel">
-                <header class="panel-head">
-                  <h2>Referee Log</h2>
-                  <p>Structured runtime log tail.</p>
-                </header>
-                <pre id="refereeLog" class="logbox tall-log">loading...</pre>
-              </article>
+              <div class="logs-stack">
+                <article class="panel">
+                  <header class="panel-head">
+                    <h2>Referee Log</h2>
+                    <p>Structured runtime log tail.</p>
+                  </header>
+                  <pre id="refereeLog" class="logbox medium-log">loading...</pre>
+                </article>
 
-              <article class="panel">
-                <header class="panel-head">
-                  <h2>HAProxy Log</h2>
-                  <p>Frontend and backend log tail.</p>
-                </header>
-                <pre id="haproxyLog" class="logbox tall-log">loading...</pre>
-              </article>
+                <article class="panel">
+                  <header class="panel-head">
+                    <h2>HAProxy Log</h2>
+                    <p>Frontend and backend log tail.</p>
+                  </header>
+                  <pre id="haproxyLog" class="logbox medium-log">loading...</pre>
+                </article>
+              </div>
             </div>
           </section>
         </section>
@@ -640,24 +660,27 @@
                 <span class="group-label">${escapeHtml(service.variant ? `Variant ${service.variant}` : service.name)}</span>
                 <strong class="route-title">${escapeHtml(service.name)} on :${service.bind_port}</strong>
               </div>
-              <span class="pill ${pillToneClass(service.backend_connections > 0 ? 'active' : 'warning')}">
-                backend ${service.backend_connections}
+              <span class="pill ${pillToneClass(service.servers.every(server => String(server.status || '').toLowerCase() === 'up') ? 'active' : 'warning')}">
+                ${service.servers.every(server => String(server.status || '').toLowerCase() === 'up') ? 'all backends up' : 'degraded'}
               </span>
             </div>
             <dl class="route-metrics">
               <div><dt>Inbound</dt><dd>${service.inbound_connections}</dd></div>
               <div><dt>Backend</dt><dd>${service.backend_connections}</dd></div>
-              <div><dt>Path</dt><dd>${escapeHtml(service.routing_text)}</dd></div>
+              <div><dt>Nodes</dt><dd>${service.servers.length}</dd></div>
             </dl>
-            <div class="route-servers">
+            <div class="route-flow">
               ${service.servers.map(server => `
-                <div class="route-server-row">
-                  <span class="mono">${escapeHtml(server.name)}</span>
-                  <span>${escapeHtml(server.host)}:${server.port}</span>
-                  <span class="pill ${pillToneClass(server.status)}">${escapeHtml(server.status || 'unknown')}</span>
-                  <span>${server.active_connections} conn</span>
-                  <span>${server.last_change_seconds !== null && server.last_change_seconds !== undefined ? `${server.last_change_seconds}s since change` : 'no timer'}</span>
-                </div>
+                <article class="route-hop">
+                  <div class="route-hop-top">
+                    <span class="mono">${escapeHtml(server.name)}</span>
+                    <span class="pill ${pillToneClass(server.status)}">${escapeHtml(server.status || 'unknown')}</span>
+                  </div>
+                  <strong>${escapeHtml(server.host)}</strong>
+                  <p class="route-hop-port">:${server.port}</p>
+                  <p class="route-hop-meta">${server.active_connections} conn</p>
+                  <p class="route-hop-meta">${server.last_change_seconds !== null && server.last_change_seconds !== undefined ? `${server.last_change_seconds}s since change` : 'no timer'}</p>
+                </article>
               `).join('')}
             </div>
           </article>
@@ -715,34 +738,32 @@
         </article>
       `).join('');
 
-      document.getElementById('containerTelemetry').innerHTML = telemetry.containers.map(container => `
-        <article class="telemetry-card">
-          <div class="route-head">
-            <div>
-              <span class="group-label">${escapeHtml(container.machine_host)} / ${escapeHtml(container.variant)}</span>
-              <strong class="route-title">${escapeHtml(container.container_id)}</strong>
-            </div>
-            <span class="pill ${pillToneClass(container.health || container.status)}">
-              ${escapeHtml(container.health || container.status)}
-            </span>
-          </div>
-          <dl class="kv-list">
-            <div><dt>CPU</dt><dd>${container.cpu_percent !== null && container.cpu_percent !== undefined ? `${container.cpu_percent.toFixed(2)}%` : 'n/a'}</dd></div>
-            <div><dt>Memory</dt><dd>${escapeHtml(container.memory_usage || 'n/a')}</dd></div>
-            <div><dt>Mem %</dt><dd>${container.memory_percent !== null && container.memory_percent !== undefined ? `${container.memory_percent.toFixed(2)}%` : 'n/a'}</dd></div>
-            <div><dt>PIDs</dt><dd>${textOrFallback(container.pids, 'n/a')}</dd></div>
-            <div><dt>Restarts</dt><dd>${textOrFallback(container.restart_count, '0')}</dd></div>
-            <div><dt>Uptime</dt><dd>${formatDuration(container.uptime_seconds)}</dd></div>
-            <div><dt>Downtime</dt><dd>${formatDuration(container.downtime_seconds)}</dd></div>
-            <div><dt>Last Exit</dt><dd>${container.exit_code !== null && container.exit_code !== undefined ? container.exit_code : 'n/a'}</dd></div>
-            <div><dt>OOM</dt><dd>${container.oom_killed === true ? 'yes' : container.oom_killed === false ? 'no' : 'n/a'}</dd></div>
-            <div><dt>King</dt><dd>${escapeHtml(textOrFallback(container.king))}</dd></div>
-          </dl>
-          ${container.started_at ? `<p class="hint">started ${escapeHtml(formatTimestamp(container.started_at))}</p>` : ''}
-          ${container.finished_at && container.finished_at !== '0001-01-01T00:00:00Z' ? `<p class="hint">last exit ${escapeHtml(formatTimestamp(container.finished_at))}</p>` : ''}
-          ${container.error ? `<p class="hint tone-critical">${escapeHtml(container.error)}</p>` : ''}
-        </article>
-      `).join('') || '<p class="hint">No container telemetry available.</p>';
+      document.getElementById('containerTelemetryTable').innerHTML = telemetry.containers.map(container => `
+        <tr>
+          <td>
+            <strong>${escapeHtml(container.machine_host)}</strong><br />
+            <span class="mono">${escapeHtml(container.container_id)}</span><br />
+            <span class="hint">Variant ${escapeHtml(container.variant)}</span>
+          </td>
+          <td>
+            <span class="pill ${pillToneClass(container.health || container.status)}">${escapeHtml(container.health || container.status)}</span>
+            ${container.oom_killed === true ? '<div class="hint tone-critical">OOM killed</div>' : ''}
+            ${container.error ? `<div class="hint tone-critical">${escapeHtml(container.error)}</div>` : ''}
+          </td>
+          <td>${container.cpu_percent !== null && container.cpu_percent !== undefined ? `${container.cpu_percent.toFixed(2)}%` : 'n/a'}</td>
+          <td>
+            ${escapeHtml(container.memory_usage || 'n/a')}
+            ${container.memory_percent !== null && container.memory_percent !== undefined ? `<div class="hint">${container.memory_percent.toFixed(2)}%</div>` : ''}
+          </td>
+          <td>${textOrFallback(container.pids, 'n/a')}</td>
+          <td>${textOrFallback(container.restart_count, '0')}</td>
+          <td>${formatDuration(container.uptime_seconds)}</td>
+          <td>
+            ${container.exit_code !== null && container.exit_code !== undefined ? `code ${container.exit_code}` : 'n/a'}
+            ${container.finished_at && container.finished_at !== '0001-01-01T00:00:00Z' ? `<div class="hint">${escapeHtml(formatTimestamp(container.finished_at))}</div>` : ''}
+          </td>
+        </tr>
+      `).join('') || '<tr><td colspan="8">No container telemetry available.</td></tr>';
 
       const unreachableHosts = telemetry.hosts.filter(host => !host.reachable).map(host => host.host);
       const hotHosts = telemetry.hosts.filter(host => host.mem_percent !== null && host.mem_percent >= 85).map(host => `${host.host} memory ${host.mem_percent}%`);
