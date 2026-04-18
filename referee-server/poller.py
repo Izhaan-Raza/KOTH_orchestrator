@@ -54,7 +54,7 @@ class Poller:
             fragment = f"""
 cd {series_dir} || exit 1;
 echo "===VARIANT:{variant}===";
-container_id="$(docker-compose ps -q {service} 2>/dev/null | head -n 1)";
+container_id="$({SETTINGS.docker_compose_cmd} ps -q {service} 2>/dev/null | head -n 1)";
 if [ -z "$container_id" ]; then
   echo "===ERROR===";
   echo "CONTAINER_NOT_FOUND";

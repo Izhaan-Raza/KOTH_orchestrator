@@ -17,7 +17,7 @@ Options:
   --referee-dir PATH   Referee directory containing .env (default: /opt/KOTH_orchestrator/repo/referee-server)
   --series LIST        Comma-separated series numbers to prebuild (default: 1,2,3,4,5,6,7,8)
   --hosts LIST         Comma-separated host/IP filter matching NODE_HOSTS entries
-  --pull               Run docker-compose build --pull
+  --pull               Run docker compose build --pull
   -h, --help           Show this help text
 EOF
 }
@@ -148,7 +148,7 @@ for idx in "${!HOSTS[@]}"; do
     remote_dir="${REMOTE_SERIES_ROOT}/h${series}"
     echo "-- H${series}: validating compose"
     if ! ssh -i "$SSH_PRIVATE_KEY" -p "$SSH_PORT" "$target" \
-      "cd '$remote_dir' && test -f docker-compose.yml && docker-compose config -q"; then
+      "cd '$remote_dir' && test -f docker-compose.yml && docker compose config -q"; then
       echo "[FAIL] $host H${series}: compose validation failed" >&2
       failures=$((failures + 1))
       continue
@@ -156,7 +156,7 @@ for idx in "${!HOSTS[@]}"; do
 
     echo "-- H${series}: building images"
     if ! ssh -i "$SSH_PRIVATE_KEY" -p "$SSH_PORT" "$target" \
-      "cd '$remote_dir' && docker-compose build $build_flag"; then
+      "cd '$remote_dir' && docker compose build $build_flag"; then
       echo "[FAIL] $host H${series}: build failed" >&2
       failures=$((failures + 1))
       continue

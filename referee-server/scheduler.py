@@ -210,7 +210,7 @@ class RefereeRuntime:
         )
         full_command = (
             f"cd {series_dir} && "
-            f"container_id=\"$(docker-compose ps -q {service} 2>/dev/null | head -n 1)\"; "
+            f"container_id=\"$({SETTINGS.docker_compose_cmd} ps -q {service} 2>/dev/null | head -n 1)\"; "
             "if [ -z \"$container_id\" ]; then echo CONTAINER_NOT_FOUND; exit 1; fi; "
             f"docker exec -u 0 \"$container_id\" sh -lc {shlex.quote(container_script)}"
         )
@@ -334,7 +334,9 @@ class RefereeRuntime:
             self.poll_once()
             self.db.set_competition_state(status="stopping", fault_reason=None)
             if current_series > 0:
-                self._run_compose_parallel(current_series, "docker-compose down -v --remove-orphans")
+                self._run_compose_parallel(
+                    current_series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
+                )
 
             self._disable_rotation_job()
             self._post_final_scores(current_series)
@@ -396,7 +398,9 @@ class RefereeRuntime:
             if series <= 0:
                 return
             self.db.set_competition_state(status="rotating", previous_series=series, fault_reason=None)
-            self._run_compose_parallel(series, "docker-compose down -v --remove-orphans")
+            self._run_compose_parallel(
+                series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
+            )
             try:
                 self._deploy_series_or_raise(series=series)
             except RuntimeGuardError:
@@ -443,7 +447,9 @@ class RefereeRuntime:
                     previous_series=current_series,
                     fault_reason=None,
                 )
-                self._run_compose_parallel(current_series, "docker-compose down -v --remove-orphans")
+                self._run_compose_parallel(
+                    current_series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
+                )
             else:
                 self.db.set_competition_state(
                     status="rotating",
@@ -845,7 +851,9 @@ class RefereeRuntime:
 
             self.db.set_competition_state(status="rotating", previous_series=series, fault_reason=None)
             self._disable_rotation_job()
-            self._run_compose_parallel(series, "docker-compose down -v --remove-orphans")
+            self._run_compose_parallel(
+                series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
+            )
             try:
                 self._deploy_series_or_raise(series=series)
             except RuntimeGuardError as exc:
@@ -890,7 +898,9 @@ class RefereeRuntime:
             }
 
     def _rollback_series_deploy(self, series: int) -> None:
-        down_results = self._run_compose_parallel(series, "docker-compose down -v --remove-orphans")
+        down_results = self._run_compose_parallel(
+            series, f"{SETTINGS.docker_compose_cmd} down -v --remove-orphans"
+        )
         for host, (ok, output) in down_results.items():
             if not ok:
                 self._log_event_and_webhook(
@@ -903,7 +913,9 @@ class RefereeRuntime:
                 )
 
     def _deploy_series_or_raise(self, *, series: int) -> list[VariantSnapshot]:
-        up_results = self._run_compose_parallel(series, "docker-compose up -d --force-recreate")
+        up_results = self._run_compose_parallel(
+            series, f"{SETTINGS.docker_compose_cmd} up -d --force-recreate"
+        )
         for host, (ok, output) in up_results.items():
             if not ok:
                 self._log_event_and_webhook(

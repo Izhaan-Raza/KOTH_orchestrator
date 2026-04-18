@@ -23,7 +23,9 @@ def main() -> None:
     )
     try:
         for host in SETTINGS.node_hosts:
-            code, out, err = ssh.exec(host, "docker --version && docker-compose --version")
+            code, out, err = ssh.exec(
+                host, f"docker --version && {SETTINGS.docker_compose_cmd} version"
+            )
             print(f"[{host}] code={code}")
             print((out or err).strip())
 

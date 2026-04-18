@@ -53,7 +53,7 @@ python setup_cli.py --series 1
 
 Expected result:
 
-- each node reports working Docker and `docker-compose`
+- each node reports working Docker and `docker compose` (or a compatibility shim for `docker-compose`)
 - each node reports `H1 compose: OK`
 
 ## Code Paths

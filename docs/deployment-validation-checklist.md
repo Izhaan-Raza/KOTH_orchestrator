@@ -12,7 +12,7 @@ Mark each item explicitly as:
 
 - [ ] `chrony` is active and synchronized
 - [ ] `docker` is installed and daemon is running
-- [ ] `docker-compose` command works
+- [ ] `docker compose` plugin works (or compatibility shim forwards `docker-compose` to it)
 - [ ] `INSTALL_ROOT/repo` exists and is the `KOTH_orchestrator` repo
 - [ ] `INSTALL_ROOT/h1..h8/docker-compose.yml` all exist
 - [ ] `h1..h8` compose files contain expected `machineH{N}{A|B|C}` services
@@ -24,7 +24,7 @@ Mark each item explicitly as:
 
 - [ ] `chrony` is active and synchronized
 - [ ] `docker` is installed and daemon is running
-- [ ] `docker-compose` command works
+- [ ] `docker compose` plugin works (or compatibility shim forwards `docker-compose` to it)
 - [ ] `INSTALL_ROOT/repo` exists and is the `KOTH_orchestrator` repo
 - [ ] `INSTALL_ROOT/h1..h8/docker-compose.yml` all exist
 - [ ] `h1..h8` compose files contain expected `machineH{N}{A|B|C}` services
@@ -36,7 +36,7 @@ Mark each item explicitly as:
 
 - [ ] `chrony` is active and synchronized
 - [ ] `docker` is installed and daemon is running
-- [ ] `docker-compose` command works
+- [ ] `docker compose` plugin works (or compatibility shim forwards `docker-compose` to it)
 - [ ] `INSTALL_ROOT/repo` exists and is the `KOTH_orchestrator` repo
 - [ ] `INSTALL_ROOT/h1..h8/docker-compose.yml` all exist
 - [ ] `h1..h8` compose files contain expected `machineH{N}{A|B|C}` services

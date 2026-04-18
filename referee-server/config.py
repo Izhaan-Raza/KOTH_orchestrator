@@ -84,6 +84,7 @@ class Settings:
 
     # <REMOTE_SERIES_ROOT>/h{series}/docker-compose.yml on each challenge node
     remote_series_root: str = os.getenv("REMOTE_SERIES_ROOT", "/opt/KOTH_orchestrator")
+    docker_compose_cmd: str = os.getenv("DOCKER_COMPOSE_CMD", "docker compose").strip()
     container_name_template: str = os.getenv(
         "CONTAINER_NAME_TEMPLATE", "machineH{series}{variant}"
     )
@@ -129,6 +130,8 @@ class Settings:
             raise RuntimeError("DEPLOY_HEALTH_TIMEOUT_SECONDS must be >= 1")
         if self.deploy_health_poll_seconds < 1:
             raise RuntimeError("DEPLOY_HEALTH_POLL_SECONDS must be >= 1")
+        if not self.docker_compose_cmd:
+            raise RuntimeError("DOCKER_COMPOSE_CMD must not be empty")
 
 
 SETTINGS = Settings()

@@ -54,18 +54,20 @@ docker compose version
 ```
 
 Important:
-Referee runtime executes `docker-compose ...` on nodes, so ensure `docker-compose` command exists.
+Referee runtime executes `docker compose ...` on nodes by default, so ensure the Docker Compose v2 plugin is installed and working.
 
 ```bash
 sudo apt install -y docker-compose-plugin
-docker-compose --version
+docker compose version
 ```
 
-If `docker-compose` is still missing, install compatibility package:
+If you must keep legacy scripts working, add a compatibility shim that forwards `docker-compose` to `docker compose` after the plugin is installed:
 
 ```bash
-sudo apt install -y docker-compose
-docker-compose --version
+sudo install -d /usr/local/bin
+printf '%s\n' '#!/usr/bin/env bash' 'exec docker compose "$@"' | sudo tee /usr/local/bin/docker-compose >/dev/null
+sudo chmod +x /usr/local/bin/docker-compose
+docker-compose version
 ```
 
 ## 2.3 Clone repository
@@ -251,7 +253,7 @@ Additional notes:
 
 1. `NODE_SSH_TARGETS` must contain one entry for each `NODE_HOSTS` value.
 2. Keep `NODE_HOSTS` and `NODE_PRIORITY` as plain host/IP values. Put usernames only in `NODE_SSH_TARGETS`.
-3. `SSH_TIMEOUT_SECONDS=300` is recommended so first-time `docker-compose up -d` does not fail during remote image builds.
+3. `SSH_TIMEOUT_SECONDS=300` is recommended so first-time `docker compose up -d` does not fail during remote image builds.
 4. See [referee-per-node-ssh-targets.md](/opt/KOTH_orchestrator/repo/docs/referee-per-node-ssh-targets.md) for mixed-user details.
 
 Generate a strong API key:

@@ -24,6 +24,7 @@ done
 
 PASS=0
 FAIL=0
+COMPOSE_BIN=()
 
 pass() { echo "[PASS] $*"; PASS=$((PASS + 1)); }
 fail() { echo "[FAIL] $*"; FAIL=$((FAIL + 1)); }
@@ -37,15 +38,28 @@ require_cmd() {
   fi
 }
 
+compose_cmd() {
+  "${COMPOSE_BIN[@]}" "$@"
+}
+
 echo "== KOTH Node Validation =="
 echo "Host: $(hostname)"
 echo "Series root: $SERIES_ROOT"
 echo
 
 require_cmd docker
-require_cmd docker-compose
 require_cmd grep
 require_cmd awk
+
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE_BIN=(docker compose)
+  pass "docker compose plugin available"
+elif command -v docker-compose >/dev/null 2>&1; then
+  COMPOSE_BIN=(docker-compose)
+  pass "docker-compose v1 command available"
+else
+  fail "missing docker compose command"
+fi
 
 if systemctl is-active --quiet chrony; then
   pass "chrony service active"
@@ -76,7 +90,7 @@ for s in 1 2 3 4 5 6 7 8; do
 
   if (
     cd "$SERIES_ROOT/h$s" &&
-    services="$(docker-compose config --services 2>/dev/null)" &&
+    services="$(compose_cmd config --services 2>/dev/null)" &&
     printf '%s\n' "$services" | grep -qx "machineH${s}A" &&
     printf '%s\n' "$services" | grep -qx "machineH${s}B" &&
     printf '%s\n' "$services" | grep -qx "machineH${s}C"
@@ -92,7 +106,7 @@ if [[ -n "$ACTIVE_SERIES" ]]; then
     service="machineH${ACTIVE_SERIES}${v}"
     if (
       cd "$SERIES_ROOT/h$ACTIVE_SERIES" &&
-      cid="$(docker-compose ps -q "$service" 2>/dev/null | head -n 1)" &&
+      cid="$(compose_cmd ps -q "$service" 2>/dev/null | head -n 1)" &&
       [[ -n "$cid" ]] &&
       docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null | grep -qx "true"
     ); then
@@ -103,7 +117,7 @@ if [[ -n "$ACTIVE_SERIES" ]]; then
 
     if (
       cd "$SERIES_ROOT/h$ACTIVE_SERIES" &&
-      cid="$(docker-compose ps -q "$service" 2>/dev/null | head -n 1)" &&
+      cid="$(compose_cmd ps -q "$service" 2>/dev/null | head -n 1)" &&
       [[ -n "$cid" ]] &&
       king_value="$(docker exec "$cid" sh -lc 'cat /root/king.txt 2>/dev/null || true')" &&
       [[ -n "$king_value" ]]

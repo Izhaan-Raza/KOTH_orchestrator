@@ -18,7 +18,7 @@ class FakeSSHPool:
 
     def exec(self, host: str, command: str) -> tuple[int, str, str]:
         self.commands.append((host, command))
-        if "docker --version && docker-compose --version" in command:
+        if "docker --version && docker compose version" in command:
             return 0, "Docker version 27.0.1\nDocker Compose version v2.29.1\n", ""
         if "docker-compose.yml" in command:
             return 0, "OK\n", ""
@@ -33,7 +33,7 @@ def emulate_ssh(*, hosts: list[str], series: int, series_root: str) -> list[str]
     lines: list[str] = []
     try:
         for host in hosts:
-            code, out, err = ssh.exec(host, "docker --version && docker-compose --version")
+            code, out, err = ssh.exec(host, "docker --version && docker compose version")
             lines.append(f"[{host}] docker check code={code}")
             lines.append((out or err).strip())
 

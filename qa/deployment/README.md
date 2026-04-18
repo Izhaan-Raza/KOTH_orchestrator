@@ -52,7 +52,7 @@ This emulates:
 
 ## 3) Pre-build Docker image cache on challenge nodes
 
-Use this before the first competition start so `docker-compose up -d` does not
+Use this before the first competition start so `docker compose up -d` does not
 time out while building images on the nodes:
 
 ```bash
