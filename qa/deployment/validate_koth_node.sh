@@ -119,7 +119,7 @@ if [[ -n "$ACTIVE_SERIES" ]]; then
       cd "$SERIES_ROOT/h$ACTIVE_SERIES" &&
       cid="$(compose_cmd ps -q "$service" 2>/dev/null | head -n 1)" &&
       [[ -n "$cid" ]] &&
-      king_value="$(docker exec "$cid" sh -lc 'cat /root/king.txt 2>/dev/null || true')" &&
+      king_value="$(docker exec -u 0 "$cid" sh -lc 'cat /root/king.txt 2>/dev/null || true')" &&
       [[ -n "$king_value" ]]
     ); then
       pass "active service king.txt present: $service"
