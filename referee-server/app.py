@@ -720,8 +720,9 @@ def _remote_host_telemetry(
     except json.JSONDecodeError:
         metrics = {}
     container_names = [
-        _compose_service_name(int(item["series"]), str(item["variant"]))
+        str(item.get("container_id") or "").strip()
         for item in containers
+        if str(item.get("container_id") or "").strip()
     ]
     stats_index: dict[str, dict] = {}
     inspect_index: dict[str, dict] = {}
@@ -760,7 +761,9 @@ def _remote_host_telemetry(
 
     telemetry: list[ContainerTelemetryResponse] = []
     for item in containers:
-        query_name = _compose_service_name(int(item["series"]), str(item["variant"]))
+        query_name = str(item.get("container_id") or "").strip() or _compose_service_name(
+            int(item["series"]), str(item["variant"])
+        )
         stats = stats_index.get(query_name, {})
         inspect = inspect_index.get(query_name, {})
         state = inspect.get("State", {})

@@ -395,6 +395,10 @@
       }
     }
 
+    function activeTabId() {
+      return document.querySelector('.tab-button.is-active')?.dataset.tabTarget || 'operationsTab';
+    }
+
     async function post(url, body) {
       const res = await fetch(url, {
         method: 'POST',
@@ -883,28 +887,36 @@
           logAction('enter the admin API key to load runtime data');
           return;
         }
-        const [status, runtime, teams, events, routing, telemetry, claims, refereeLog, haproxyLog] = await Promise.all([
+        const [status, runtime, teams, events] = await Promise.all([
           getJson('/api/status'),
           getJson('/api/runtime'),
           getJson('/api/teams'),
           getJson('/api/events?limit=40'),
-          getJson('/api/routing'),
-          getJson('/api/telemetry'),
-          getJson('/api/claims?limit=30'),
-          getJson('/api/logs/referee?lines=60'),
-          getJson('/api/logs/haproxy?lines=60'),
         ]);
         renderRuntime(status, runtime);
         renderTeams(teams);
         renderContainers(status.containers);
         renderEvents(events);
         renderEventBrief(status, runtime, teams);
-        renderRouting(routing);
-        renderTelemetry(telemetry);
-        renderClaims(claims);
-        renderLogsBrief(events, claims);
-        renderLogBox('refereeLog', refereeLog);
-        renderLogBox('haproxyLog', haproxyLog);
+
+        const tab = activeTabId();
+        if (tab === 'routingTab') {
+          const routing = await getJson('/api/routing');
+          renderRouting(routing);
+        } else if (tab === 'healthTab') {
+          const telemetry = await getJson('/api/telemetry');
+          renderTelemetry(telemetry);
+        } else if (tab === 'logsTab') {
+          const [claims, refereeLog, haproxyLog] = await Promise.all([
+            getJson('/api/claims?limit=30'),
+            getJson('/api/logs/referee?lines=60'),
+            getJson('/api/logs/haproxy?lines=60'),
+          ]);
+          renderClaims(claims);
+          renderLogsBrief(events, claims);
+          renderLogBox('refereeLog', refereeLog);
+          renderLogBox('haproxyLog', haproxyLog);
+        }
       } catch (error) {
         logAction(`refresh failed: ${error.message}`);
       }
@@ -921,7 +933,6 @@
         const payload = await post('/api/admin/teams', {name});
         input.value = '';
         logAction(`team created: ${payload.name}`);
-        await refresh();
       } catch (error) {
         logAction(`team create failed: ${error.message}`);
       }
@@ -934,7 +945,6 @@
       try {
         const payload = await post(endpoint);
         logAction(`${action}: ${payload.name} -> ${payload.status}`);
-        await refresh();
       } catch (error) {
         logAction(`${action} failed for ${teamName}: ${error.message}`);
       }
@@ -963,6 +973,7 @@
         return;
       }
       activateTab(button.dataset.tabTarget);
+      refresh();
     });
     window.addEventListener('hashchange', () => activateTab(window.location.hash));
     activateTab(window.location.hash || 'operationsTab');
