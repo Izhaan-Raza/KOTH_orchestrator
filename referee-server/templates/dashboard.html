@@ -434,11 +434,25 @@
     const publicConfigFields = ['publicHost', 'publicPorts', 'publicHeadline', 'publicSubheadline'];
     const publicConfigDirty = new Set();
     let apiKeyRefreshTimer = null;
+    let dashboardConnected = false;
 
-    async function getJson(url) {
-      const res = await fetch(url, {
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, {
+          ...options,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function getJson(url, timeoutMs = 8000) {
+      const res = await fetchWithTimeout(url, {
         headers: apiHeaders(),
-      });
+      }, timeoutMs);
       if (!res.ok) {
         throw new Error(await res.text());
       }
@@ -490,12 +504,16 @@
     let refreshPromise = null;
     let refreshPending = false;
 
+    function setDashboardConnection(connected) {
+      dashboardConnected = Boolean(connected);
+    }
+
     async function post(url, body) {
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: apiHeaders(),
         body: body ? JSON.stringify(body) : undefined,
-      });
+      }, 8000);
       if (!res.ok) {
         let detail = '';
         try {
@@ -508,17 +526,18 @@
       }
       const payload = await res.json().catch(() => ({ok: true}));
       logAction(`${url} succeeded`);
+      setDashboardConnection(true);
       setApiKeyStatus('Admin dashboard connected.', 'ok');
       await refresh();
       return payload;
     }
 
     async function put(url, body) {
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         method: 'PUT',
         headers: apiHeaders(),
         body: JSON.stringify(body || {}),
-      });
+      }, 8000);
       if (!res.ok) {
         let detail = '';
         try {
@@ -530,16 +549,17 @@
         throw new Error(detail || `HTTP ${res.status}`);
       }
       const payload = await res.json();
+      setDashboardConnection(true);
       setApiKeyStatus('Admin dashboard connected.', 'ok');
       await refresh();
       return payload;
     }
 
     async function del(url) {
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         method: 'DELETE',
         headers: apiHeaders(),
-      });
+      }, 8000);
       if (!res.ok) {
         let detail = '';
         try {
@@ -551,9 +571,57 @@
         throw new Error(detail || `HTTP ${res.status}`);
       }
       const payload = await res.json().catch(() => ({ok: true}));
+      setDashboardConnection(true);
       setApiKeyStatus('Admin dashboard connected.', 'ok');
       await refresh();
       return payload;
+    }
+
+    async function loadCoreDashboardData() {
+      const [status, runtime, teams, events] = await Promise.all([
+        getJson('/api/status'),
+        getJson('/api/runtime'),
+        getJson('/api/teams'),
+        getJson('/api/events?limit=40'),
+      ]);
+      renderRuntime(status, runtime);
+      renderTeams(teams);
+      renderContainers(status.containers);
+      renderEvents(events);
+      renderEventBrief(status, runtime, teams);
+      return {status, runtime, teams, events};
+    }
+
+    async function loadActiveTabData(tab, events) {
+      if (tab === 'operationsTab') {
+        const [publicConfig, publicNotifications] = await Promise.all([
+          getJson('/api/admin/public/config'),
+          getJson('/api/admin/public/notifications'),
+        ]);
+        renderPublicBoardAdmin(publicConfig, publicNotifications);
+        return;
+      }
+      if (tab === 'routingTab') {
+        const routing = await getJson('/api/routing');
+        renderRouting(routing);
+        return;
+      }
+      if (tab === 'healthTab') {
+        const telemetry = await getJson('/api/telemetry', 12000);
+        renderTelemetry(telemetry);
+        return;
+      }
+      if (tab === 'logsTab') {
+        const [claims, refereeLog, haproxyLog] = await Promise.all([
+          getJson('/api/claims?limit=30'),
+          getJson('/api/logs/referee?lines=60'),
+          getJson('/api/logs/haproxy?lines=60'),
+        ]);
+        renderClaims(claims);
+        renderLogsBrief(events, claims);
+        renderLogBox('refereeLog', refereeLog);
+        renderLogBox('haproxyLog', haproxyLog);
+      }
     }
 
     function formatSeries(series) {
@@ -1075,6 +1143,9 @@
     }
 
     async function refresh() {
+      if (!dashboardConnected) {
+        return null;
+      }
       if (refreshPromise) {
         refreshPending = true;
         return refreshPromise;
@@ -1082,51 +1153,27 @@
       refreshPromise = (async () => {
         try {
           if (!apiKeyInput.value.trim()) {
+            setDashboardConnection(false);
             logAction('enter the admin API key to load runtime data');
             setApiKeyStatus('Enter the admin key to load control data.', '');
             return;
           }
-          const [status, runtime, teams, events] = await Promise.all([
-            getJson('/api/status'),
-            getJson('/api/runtime'),
-            getJson('/api/teams'),
-            getJson('/api/events?limit=40'),
-          ]);
+          const {events} = await loadCoreDashboardData();
+          setDashboardConnection(true);
           setApiKeyStatus('Admin dashboard connected.', 'ok');
-          renderRuntime(status, runtime);
-          renderTeams(teams);
-          renderContainers(status.containers);
-          renderEvents(events);
-          renderEventBrief(status, runtime, teams);
-
           const tab = activeTabId();
-          if (tab === 'operationsTab') {
-            const [publicConfig, publicNotifications] = await Promise.all([
-              getJson('/api/admin/public/config'),
-              getJson('/api/admin/public/notifications'),
-            ]);
-            renderPublicBoardAdmin(publicConfig, publicNotifications);
-          } else if (tab === 'routingTab') {
-            const routing = await getJson('/api/routing');
-            renderRouting(routing);
-          } else if (tab === 'healthTab') {
-            const telemetry = await getJson('/api/telemetry');
-            renderTelemetry(telemetry);
-          } else if (tab === 'logsTab') {
-            const [claims, refereeLog, haproxyLog] = await Promise.all([
-              getJson('/api/claims?limit=30'),
-              getJson('/api/logs/referee?lines=60'),
-              getJson('/api/logs/haproxy?lines=60'),
-            ]);
-            renderClaims(claims);
-            renderLogsBrief(events, claims);
-            renderLogBox('refereeLog', refereeLog);
-            renderLogBox('haproxyLog', haproxyLog);
+          try {
+            await loadActiveTabData(tab, events);
+          } catch (tabError) {
+            logAction(`${tab.replace('Tab', '')} data failed: ${tabError.message}`);
           }
         } catch (error) {
           const message = String(error.message || '');
           if (message.includes('unauthorized')) {
+            setDashboardConnection(false);
             setApiKeyStatus('API key rejected. Check the current admin key and try again.', 'critical');
+          } else if (message.toLowerCase().includes('abort')) {
+            setApiKeyStatus('Connect timed out. The dashboard is reachable but a request stalled.', 'warning');
           } else {
             setApiKeyStatus('Refresh failed. Check the action feed for details.', 'warning');
           }
@@ -1222,30 +1269,48 @@
       }, 250);
     }
 
-    function connectApi() {
+    async function connectApi() {
       if (!apiKeyInput.value.trim()) {
+        setDashboardConnection(false);
         setApiKeyStatus('Enter the admin key to load control data.', '');
         return;
       }
       setApiKeyStatus('Connecting…', 'warning');
-      void refresh();
+      activateTab('operationsTab');
+      try {
+        await getJson('/api/runtime', 5000);
+        setDashboardConnection(true);
+        setApiKeyStatus('Admin dashboard connected.', 'ok');
+        await refresh();
+      } catch (error) {
+        setDashboardConnection(false);
+        const message = String(error.message || '');
+        if (message.includes('unauthorized')) {
+          setApiKeyStatus('API key rejected. Check the current admin key and try again.', 'critical');
+        } else {
+          setApiKeyStatus('Connect failed. Check the action feed for details.', 'warning');
+        }
+        logAction(`connect failed: ${error.message}`);
+      }
     }
 
     document.querySelectorAll('[data-action]').forEach(button => {
       button.addEventListener('click', () => runAction(button.dataset.action));
     });
-    document.getElementById('connectApiBtn').addEventListener('click', connectApi);
+    document.getElementById('connectApiBtn').addEventListener('click', () => {
+      void connectApi();
+    });
     document.getElementById('createTeamBtn').addEventListener('click', createTeam);
     document.getElementById('savePublicConfigBtn').addEventListener('click', savePublicConfig);
     document.getElementById('addNotificationBtn').addEventListener('click', createPublicNotification);
     apiKeyInput.addEventListener('input', () => {
-      setApiKeyStatus(apiKeyInput.value.trim() ? 'Connecting…' : 'Enter the admin key to load control data.', apiKeyInput.value.trim() ? 'warning' : '');
-      scheduleApiRefresh();
+      setDashboardConnection(false);
+      setApiKeyStatus(apiKeyInput.value.trim() ? 'Ready to connect.' : 'Enter the admin key to load control data.', apiKeyInput.value.trim() ? 'warning' : '');
     });
     apiKeyInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') {
         event.preventDefault();
-        connectApi();
+        void connectApi();
       }
     });
     document.getElementById('newTeamName').addEventListener('keydown', event => {
@@ -1294,13 +1359,19 @@
         return;
       }
       activateTab(button.dataset.tabTarget);
-      refresh();
+      if (dashboardConnected) {
+        void refresh();
+      }
     });
     window.addEventListener('hashchange', () => activateTab(window.location.hash));
     activateTab(window.location.hash || 'operationsTab');
 
-    setInterval(refresh, 5000);
-    refresh();
+    setInterval(() => {
+      if (dashboardConnected) {
+        void refresh();
+      }
+    }, 5000);
+    setApiKeyStatus('Enter the admin key to load control data.', '');
   </script>
 </body>
 </html>
