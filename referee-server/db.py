@@ -142,6 +142,22 @@ class Database:
                     last_validated_series INTEGER,
                     last_validated_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS public_dashboard_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    orchestrator_host TEXT,
+                    port_ranges TEXT,
+                    headline TEXT,
+                    subheadline TEXT,
+                    updated_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS public_notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             self._ensure_column(
@@ -179,6 +195,13 @@ class Database:
                 ON CONFLICT(id) DO NOTHING
                 """,
                 (now,),
+            )
+            conn.execute(
+                """
+                INSERT INTO public_dashboard_config (id, orchestrator_host, port_ranges, headline, subheadline, updated_at)
+                VALUES (1, NULL, NULL, NULL, NULL, NULL)
+                ON CONFLICT(id) DO NOTHING
+                """
             )
 
     def _ensure_column(self, conn: sqlite3.Connection, *, table: str, column: str, definition: str) -> None:
@@ -268,6 +291,98 @@ class Database:
                 (name,),
             ).fetchone()
         return dict(row)
+
+    def get_public_dashboard_config(self) -> dict[str, Any]:
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT orchestrator_host, port_ranges, headline, subheadline, updated_at
+                FROM public_dashboard_config
+                WHERE id=1
+                """
+            ).fetchone()
+        if row is None:
+            return {
+                "orchestrator_host": None,
+                "port_ranges": None,
+                "headline": None,
+                "subheadline": None,
+                "updated_at": None,
+            }
+        return dict(row)
+
+    def set_public_dashboard_config(
+        self,
+        *,
+        orchestrator_host: str | None = _UNSET,
+        port_ranges: str | None = _UNSET,
+        headline: str | None = _UNSET,
+        subheadline: str | None = _UNSET,
+    ) -> dict[str, Any]:
+        assignments: list[str] = []
+        params: list[Any] = []
+        if orchestrator_host is not _UNSET:
+            assignments.append("orchestrator_host=?")
+            params.append(orchestrator_host)
+        if port_ranges is not _UNSET:
+            assignments.append("port_ranges=?")
+            params.append(port_ranges)
+        if headline is not _UNSET:
+            assignments.append("headline=?")
+            params.append(headline)
+        if subheadline is not _UNSET:
+            assignments.append("subheadline=?")
+            params.append(subheadline)
+        assignments.append("updated_at=?")
+        params.append(datetime.now(UTC).isoformat())
+        params.append(1)
+        with self.tx() as conn:
+            conn.execute(
+                f"UPDATE public_dashboard_config SET {', '.join(assignments)} WHERE id=?",
+                tuple(params),
+            )
+        return self.get_public_dashboard_config()
+
+    def list_public_notifications(self, *, limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, message, severity, created_at
+                FROM public_notifications
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_public_notification(self, *, message: str, severity: str) -> dict[str, Any]:
+        created_at = datetime.now(UTC).isoformat()
+        with self.tx() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO public_notifications (message, severity, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (message, severity, created_at),
+            )
+            row = conn.execute(
+                """
+                SELECT id, message, severity, created_at
+                FROM public_notifications
+                WHERE id=?
+                """,
+                (int(cursor.lastrowid),),
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def delete_public_notification(self, notification_id: int) -> bool:
+        with self.tx() as conn:
+            cursor = conn.execute(
+                "DELETE FROM public_notifications WHERE id=?",
+                (notification_id,),
+            )
+        return cursor.rowcount > 0
 
     def team_exists(self, name: str) -> bool:
         with self._lock:

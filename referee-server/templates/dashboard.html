@@ -23,6 +23,10 @@
       <aside class="hero-glass">
         <label for="apiKey">API Key</label>
         <input id="apiKey" type="password" placeholder="X-API-Key" autocomplete="off" />
+        <div class="hero-actions">
+          <button id="connectApiBtn" type="button">Connect</button>
+          <span id="apiKeyStatus" class="hint">Enter the admin key to load control data.</span>
+        </div>
       </aside>
     </header>
 
@@ -203,6 +207,78 @@
                 </div>
               </article>
             </div>
+
+            <article class="panel">
+              <header class="panel-head">
+                <h2>Participant Board</h2>
+                <p>What players see on the public `:9000` dashboard.</p>
+              </header>
+              <div class="two-col-grid">
+                <section class="subpanel">
+                  <div class="subpanel-head">
+                    <h2>Public Access Settings</h2>
+                    <p>Displayed host and port ranges for players.</p>
+                  </div>
+                  <div class="stack-grid">
+                    <div class="inline-form">
+                      <label for="publicHost">Host / IP</label>
+                      <input id="publicHost" type="text" placeholder="192.168.0.12" />
+                      <button id="savePublicConfigBtn" type="button">Save</button>
+                    </div>
+                    <div class="inline-form">
+                      <label for="publicPorts">Port Ranges</label>
+                      <input id="publicPorts" type="text" placeholder="10001-10004" />
+                      <span></span>
+                    </div>
+                    <div class="inline-form">
+                      <label for="publicHeadline">Headline</label>
+                      <input id="publicHeadline" type="text" placeholder="Current Access Window" />
+                      <span></span>
+                    </div>
+                    <div class="inline-form">
+                      <label for="publicSubheadline">Subheadline</label>
+                      <input id="publicSubheadline" type="text" placeholder="Use this board for the current orchestrator address, live challenge ports, and organizer notices." />
+                      <span></span>
+                    </div>
+                    <p class="hint" id="publicBoardHint">The participant board is served separately on port `9000`.</p>
+                  </div>
+                </section>
+
+                <section class="subpanel">
+                  <div class="subpanel-head">
+                    <h2>Participant Notifications</h2>
+                    <p>Manual announcements shown to every player.</p>
+                  </div>
+                  <div class="inline-form">
+                    <label for="notificationSeverity">Severity</label>
+                    <select id="notificationSeverity">
+                      <option value="info">info</option>
+                      <option value="warning">warning</option>
+                      <option value="critical">critical</option>
+                    </select>
+                    <button id="addNotificationBtn" type="button">Post</button>
+                  </div>
+                  <div class="inline-form">
+                    <label for="notificationMessage">Message</label>
+                    <input id="notificationMessage" type="text" maxlength="500" placeholder="Players will see this on the public board." />
+                    <span></span>
+                  </div>
+                  <div class="table-wrap short">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Time</th>
+                          <th>Severity</th>
+                          <th>Message</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody id="publicNotificationsTable"></tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            </article>
           </section>
 
           <section id="routingTab" class="tab-panel">
@@ -354,6 +430,10 @@
 
   <script>
     const apiKeyInput = document.getElementById('apiKey');
+    const apiKeyStatus = document.getElementById('apiKeyStatus');
+    const publicConfigFields = ['publicHost', 'publicPorts', 'publicHeadline', 'publicSubheadline'];
+    const publicConfigDirty = new Set();
+    let apiKeyRefreshTimer = null;
 
     async function getJson(url) {
       const res = await fetch(url, {
@@ -363,6 +443,14 @@
         throw new Error(await res.text());
       }
       return await res.json();
+    }
+
+    function setApiKeyStatus(message, tone = '') {
+      apiKeyStatus.textContent = message;
+      apiKeyStatus.classList.remove('tone-ok', 'tone-warning', 'tone-critical');
+      if (tone) {
+        apiKeyStatus.classList.add(`tone-${tone}`);
+      }
     }
 
     function apiHeaders() {
@@ -420,6 +508,50 @@
       }
       const payload = await res.json().catch(() => ({ok: true}));
       logAction(`${url} succeeded`);
+      setApiKeyStatus('Admin dashboard connected.', 'ok');
+      await refresh();
+      return payload;
+    }
+
+    async function put(url, body) {
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: apiHeaders(),
+        body: JSON.stringify(body || {}),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const payload = await res.json();
+          detail = payload.detail || JSON.stringify(payload);
+        } catch (_) {
+          detail = await res.text();
+        }
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      setApiKeyStatus('Admin dashboard connected.', 'ok');
+      await refresh();
+      return payload;
+    }
+
+    async function del(url) {
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: apiHeaders(),
+      });
+      if (!res.ok) {
+        let detail = '';
+        try {
+          const payload = await res.json();
+          detail = payload.detail || JSON.stringify(payload);
+        } catch (_) {
+          detail = await res.text();
+        }
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      const payload = await res.json().catch(() => ({ok: true}));
+      setApiKeyStatus('Admin dashboard connected.', 'ok');
       await refresh();
       return payload;
     }
@@ -860,6 +992,37 @@
       renderSummaryList('logsBrief', lines, recentCritical.length ? 'warning' : '');
     }
 
+    function renderPublicBoardAdmin(config, notifications) {
+      const fieldValues = {
+        publicHost: config.orchestrator_host || '',
+        publicPorts: config.port_ranges || '',
+        publicHeadline: config.headline || '',
+        publicSubheadline: config.subheadline || '',
+      };
+      for (const [fieldId, value] of Object.entries(fieldValues)) {
+        const element = document.getElementById(fieldId);
+        if (!element) {
+          continue;
+        }
+        const isFocused = document.activeElement === element;
+        if (!publicConfigDirty.has(fieldId) && !isFocused) {
+          element.value = value;
+        }
+      }
+      const previewHost = config.orchestrator_host || window.location.hostname;
+      document.getElementById('publicBoardHint').textContent = `Public board: http://${previewHost}:9000/`;
+      document.getElementById('publicNotificationsTable').innerHTML = notifications
+        .map(notification => `
+          <tr>
+            <td class="mono">${formatTimestamp(notification.created_at)}</td>
+            <td><span class="pill ${pillToneClass(notification.severity)}">${escapeHtml(notification.severity)}</span></td>
+            <td>${escapeHtml(notification.message)}</td>
+            <td><button type="button" data-notification-delete="${notification.id}">Delete</button></td>
+          </tr>
+        `)
+        .join('') || '<tr><td colspan="4">No participant notifications posted.</td></tr>';
+    }
+
     async function runAction(action) {
       try {
         switch (action) {
@@ -920,6 +1083,7 @@
         try {
           if (!apiKeyInput.value.trim()) {
             logAction('enter the admin API key to load runtime data');
+            setApiKeyStatus('Enter the admin key to load control data.', '');
             return;
           }
           const [status, runtime, teams, events] = await Promise.all([
@@ -928,6 +1092,7 @@
             getJson('/api/teams'),
             getJson('/api/events?limit=40'),
           ]);
+          setApiKeyStatus('Admin dashboard connected.', 'ok');
           renderRuntime(status, runtime);
           renderTeams(teams);
           renderContainers(status.containers);
@@ -935,7 +1100,13 @@
           renderEventBrief(status, runtime, teams);
 
           const tab = activeTabId();
-          if (tab === 'routingTab') {
+          if (tab === 'operationsTab') {
+            const [publicConfig, publicNotifications] = await Promise.all([
+              getJson('/api/admin/public/config'),
+              getJson('/api/admin/public/notifications'),
+            ]);
+            renderPublicBoardAdmin(publicConfig, publicNotifications);
+          } else if (tab === 'routingTab') {
             const routing = await getJson('/api/routing');
             renderRouting(routing);
           } else if (tab === 'healthTab') {
@@ -953,6 +1124,12 @@
             renderLogBox('haproxyLog', haproxyLog);
           }
         } catch (error) {
+          const message = String(error.message || '');
+          if (message.includes('unauthorized')) {
+            setApiKeyStatus('API key rejected. Check the current admin key and try again.', 'critical');
+          } else {
+            setApiKeyStatus('Refresh failed. Check the action feed for details.', 'warning');
+          }
           logAction(`refresh failed: ${error.message}`);
         } finally {
           refreshPromise = null;
@@ -993,14 +1170,94 @@
       }
     }
 
+    async function savePublicConfig() {
+      try {
+        await put('/api/admin/public/config', {
+          orchestrator_host: document.getElementById('publicHost').value.trim() || null,
+          port_ranges: document.getElementById('publicPorts').value.trim() || null,
+          headline: document.getElementById('publicHeadline').value.trim() || null,
+          subheadline: document.getElementById('publicSubheadline').value.trim() || null,
+        });
+        publicConfigDirty.clear();
+        logAction('participant board settings saved');
+      } catch (error) {
+        logAction(`participant board save failed: ${error.message}`);
+      }
+    }
+
+    async function createPublicNotification() {
+      const message = document.getElementById('notificationMessage').value.trim();
+      if (!message) {
+        logAction('notification create failed: enter a message');
+        return;
+      }
+      try {
+        await post('/api/admin/public/notifications', {
+          message,
+          severity: document.getElementById('notificationSeverity').value,
+        });
+        document.getElementById('notificationMessage').value = '';
+        logAction('participant notification posted');
+      } catch (error) {
+        logAction(`notification create failed: ${error.message}`);
+      }
+    }
+
+    async function deletePublicNotification(notificationId) {
+      try {
+        await del(`/api/admin/public/notifications/${notificationId}`);
+        logAction(`participant notification ${notificationId} deleted`);
+      } catch (error) {
+        logAction(`notification delete failed: ${error.message}`);
+      }
+    }
+
+    function scheduleApiRefresh() {
+      if (apiKeyRefreshTimer) {
+        clearTimeout(apiKeyRefreshTimer);
+      }
+      apiKeyRefreshTimer = setTimeout(() => {
+        apiKeyRefreshTimer = null;
+        void refresh();
+      }, 250);
+    }
+
+    function connectApi() {
+      if (!apiKeyInput.value.trim()) {
+        setApiKeyStatus('Enter the admin key to load control data.', '');
+        return;
+      }
+      setApiKeyStatus('Connecting…', 'warning');
+      void refresh();
+    }
+
     document.querySelectorAll('[data-action]').forEach(button => {
       button.addEventListener('click', () => runAction(button.dataset.action));
     });
+    document.getElementById('connectApiBtn').addEventListener('click', connectApi);
     document.getElementById('createTeamBtn').addEventListener('click', createTeam);
+    document.getElementById('savePublicConfigBtn').addEventListener('click', savePublicConfig);
+    document.getElementById('addNotificationBtn').addEventListener('click', createPublicNotification);
+    apiKeyInput.addEventListener('input', () => {
+      setApiKeyStatus(apiKeyInput.value.trim() ? 'Connecting…' : 'Enter the admin key to load control data.', apiKeyInput.value.trim() ? 'warning' : '');
+      scheduleApiRefresh();
+    });
+    apiKeyInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        connectApi();
+      }
+    });
     document.getElementById('newTeamName').addEventListener('keydown', event => {
       if (event.key === 'Enter') {
         event.preventDefault();
         createTeam();
+      }
+    });
+    document.getElementById('notificationMessage').addEventListener('keydown', event => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        createPublicNotification();
       }
     });
     document.getElementById('teamsTable').addEventListener('click', event => {
@@ -1009,6 +1266,27 @@
         return;
       }
       manageTeam(button.dataset.teamAction, button.dataset.teamName);
+    });
+    document.getElementById('publicNotificationsTable').addEventListener('click', event => {
+      const button = event.target.closest('[data-notification-delete]');
+      if (!button) {
+        return;
+      }
+      deletePublicNotification(button.dataset.notificationDelete);
+    });
+    publicConfigFields.forEach(fieldId => {
+      const element = document.getElementById(fieldId);
+      if (!element) {
+        return;
+      }
+      element.addEventListener('input', () => {
+        publicConfigDirty.add(fieldId);
+      });
+      element.addEventListener('blur', () => {
+        if (!element.value.trim()) {
+          publicConfigDirty.delete(fieldId);
+        }
+      });
     });
     document.querySelector('.tabs').addEventListener('click', event => {
       const button = event.target.closest('[data-tab-target]');

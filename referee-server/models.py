@@ -220,6 +220,44 @@ class TeamStatusUpdateResponse(BaseModel):
     detail: str
 
 
+class PublicDashboardConfigResponse(BaseModel):
+    orchestrator_host: str | None
+    port_ranges: str | None
+    headline: str | None
+    subheadline: str | None
+    updated_at: datetime | None
+
+
+class PublicDashboardConfigUpdate(BaseModel):
+    orchestrator_host: str | None = None
+    port_ranges: str | None = None
+    headline: str | None = None
+    subheadline: str | None = None
+
+
+class PublicNotificationResponse(BaseModel):
+    id: int
+    message: str
+    severity: Literal["info", "warning", "critical"]
+    created_at: datetime
+
+
+class PublicNotificationIn(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    severity: Literal["info", "warning", "critical"] = "info"
+
+
+class PublicDashboardResponse(BaseModel):
+    current_series: int
+    competition_status: CompetitionStatus
+    orchestrator_host: str
+    port_ranges: str
+    headline: str
+    subheadline: str
+    updated_at: datetime | None
+    notifications: list[PublicNotificationResponse]
+
+
 class WebhookPayload(BaseModel):
     event_id: int
     event_type: str

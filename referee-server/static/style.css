@@ -65,12 +65,14 @@ pre {
 }
 
 input,
+select,
 button {
   font: inherit;
 }
 
 button,
-input {
+input,
+select {
   border-radius: 0;
   border: 1px solid var(--line-strong);
   background: var(--surface);
@@ -88,6 +90,11 @@ button:hover {
 }
 
 input {
+  padding: 10px 12px;
+}
+
+select {
+  min-height: 44px;
   padding: 10px 12px;
 }
 
@@ -179,6 +186,13 @@ h2 {
   background: rgba(8, 8, 8, 0.64);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+
+.hero-actions {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
 }
 
 .overview-strip {
@@ -796,6 +810,20 @@ tbody tr:last-child td {
   border: 1px solid var(--line);
   background: rgba(10, 10, 10, 0.55);
   line-height: 1.45;
+}
+
+.participant-masthead {
+  min-height: 180px;
+}
+
+.participant-grid {
+  margin-top: 16px;
+}
+
+.public-callout {
+  font-size: 20px;
+  font-family: var(--display);
+  letter-spacing: 0.05em;
 }
 
 @media (max-width: 1400px) {

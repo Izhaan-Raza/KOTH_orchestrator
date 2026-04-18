@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KOTH Access Board</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="masthead participant-masthead">
+      <section class="brand">
+        <p class="eyebrow">Participant Board</p>
+        <h1 id="publicHeadline">Current Access Window</h1>
+        <p class="subtitle" id="publicSubheadline">Use this board for the current orchestrator address, live challenge ports, and organizer notices.</p>
+      </section>
+      <aside class="hero-glass">
+        <label>Live Series</label>
+        <strong id="participantSeries" class="public-callout">n/a</strong>
+        <label>Status</label>
+        <strong id="participantStatus" class="public-callout">n/a</strong>
+      </aside>
+    </header>
+
+    <section class="overview-strip">
+      <article class="metric">
+        <span class="metric-label">Orchestrator Host</span>
+        <strong id="publicHostMetric">n/a</strong>
+      </article>
+      <article class="metric">
+        <span class="metric-label">Available Ports</span>
+        <strong id="publicPortsMetric">n/a</strong>
+      </article>
+      <article class="metric">
+        <span class="metric-label">Notifications</span>
+        <strong id="publicNotificationCount">0</strong>
+      </article>
+    </section>
+
+    <section class="two-col-grid participant-grid">
+      <article class="panel">
+        <header class="panel-head">
+          <h2>How To Connect</h2>
+          <p>Use the current host and port range exactly as shown here.</p>
+        </header>
+        <div class="summary-list">
+          <div class="summary-row">
+            <strong>Host / IP:</strong>
+            <span id="publicHostText">n/a</span>
+          </div>
+          <div class="summary-row">
+            <strong>Ports:</strong>
+            <span id="publicPortsText">n/a</span>
+          </div>
+          <div class="summary-row">
+            <strong>Current series:</strong>
+            <span id="publicSeriesText">n/a</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <header class="panel-head">
+          <h2>Organizer Notifications</h2>
+          <p>Manual notices posted by admins for all participants.</p>
+        </header>
+        <div id="publicNotifications" class="summary-list"></div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function formatSeries(series) {
+      return series && series > 0 ? `H${series}` : 'n/a';
+    }
+
+    function toneForState(value) {
+      const normalized = String(value || '').toLowerCase();
+      if (['running', 'active', 'clear', 'info'].includes(normalized)) {
+        return 'ok';
+      }
+      if (['paused', 'rotating', 'starting', 'stopping', 'warning'].includes(normalized)) {
+        return 'warning';
+      }
+      if (['faulted', 'critical', 'stopped'].includes(normalized)) {
+        return 'critical';
+      }
+      return '';
+    }
+
+    function setTone(element, tone) {
+      element.classList.remove('tone-ok', 'tone-warning', 'tone-critical');
+      if (tone) {
+        element.classList.add(`tone-${tone}`);
+      }
+    }
+
+    function formatTimestamp(value) {
+      if (!value) {
+        return 'now';
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+    }
+
+    function renderBoard(payload) {
+      document.getElementById('publicHeadline').textContent = payload.headline;
+      document.getElementById('publicSubheadline').textContent = payload.subheadline;
+      document.getElementById('participantSeries').textContent = formatSeries(payload.current_series);
+      document.getElementById('participantStatus').textContent = payload.competition_status;
+      document.getElementById('publicHostMetric').textContent = payload.orchestrator_host;
+      document.getElementById('publicPortsMetric').textContent = payload.port_ranges;
+      document.getElementById('publicNotificationCount').textContent = payload.notifications.length;
+      document.getElementById('publicHostText').textContent = payload.orchestrator_host;
+      document.getElementById('publicPortsText').textContent = payload.port_ranges;
+      document.getElementById('publicSeriesText').textContent = formatSeries(payload.current_series);
+      setTone(document.getElementById('participantStatus'), toneForState(payload.competition_status));
+      document.getElementById('publicNotifications').innerHTML = payload.notifications.map(notification => `
+        <div class="summary-row tone-${toneForState(notification.severity)}">
+          <strong>${escapeHtml(notification.severity.toUpperCase())}</strong><br />
+          ${escapeHtml(notification.message)}<br />
+          <span class="hint">${escapeHtml(formatTimestamp(notification.created_at))}</span>
+        </div>
+      `).join('') || '<div class="summary-row">No organizer notifications right now.</div>';
+    }
+
+    async function refreshBoard() {
+      const response = await fetch('/api/public/dashboard');
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      renderBoard(await response.json());
+    }
+
+    refreshBoard().catch(() => {});
+    setInterval(() => {
+      refreshBoard().catch(() => {});
+    }, 10000);
+  </script>
+</body>
+</html>

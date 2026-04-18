@@ -29,6 +29,11 @@ from models import (
     LbServiceResponse,
     LbStatusResponse,
     LogTailResponse,
+    PublicDashboardConfigResponse,
+    PublicDashboardConfigUpdate,
+    PublicDashboardResponse,
+    PublicNotificationIn,
+    PublicNotificationResponse,
     RecoveryResponse,
     RoutingServerResponse,
     RoutingServiceResponse,
@@ -81,9 +86,16 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="KOTH Referee", lifespan=lifespan)
+participant_app = FastAPI(
+    title="KOTH Participant Board",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 templates = Jinja2Templates(directory=str(SETTINGS.templates_dir))
 app.mount("/static", StaticFiles(directory=str(SETTINGS.static_dir)), name="static")
+participant_app.mount("/static", StaticFiles(directory=str(SETTINGS.static_dir)), name="static")
 
 
 def run_admin_action(action) -> dict:
@@ -880,9 +892,177 @@ def _telemetry_status() -> TelemetryStatusResponse:
     )
 
 
+def _listener_series(bind_port: int) -> int | None:
+    if 10001 <= bind_port <= 10004:
+        return 1
+    if 10010 <= bind_port <= 10012:
+        return 2
+    if 10020 <= bind_port <= 10023:
+        return 3
+    if 10030 <= bind_port <= 10032:
+        return 4
+    if 10040 <= bind_port <= 10042:
+        return 5
+    if 10050 <= bind_port <= 10055:
+        return 6
+    if 10061 <= bind_port <= 10063:
+        return 7
+    if 10070 <= bind_port <= 10072:
+        return 8
+    return None
+
+
+def _series_listener_ports(series: int) -> list[int]:
+    ports = sorted(
+        int(service["bind_port"])
+        for service in _haproxy_services()
+        if _listener_series(int(service["bind_port"])) == series
+    )
+    return ports
+
+
+def _format_port_ranges(ports: list[int]) -> str:
+    if not ports:
+        return "No challenge ports published"
+    ranges: list[str] = []
+    start = end = ports[0]
+    for port in ports[1:]:
+        if port == end + 1:
+            end = port
+            continue
+        ranges.append(f"{start}" if start == end else f"{start}-{end}")
+        start = end = port
+    ranges.append(f"{start}" if start == end else f"{start}-{end}")
+    return ", ".join(ranges)
+
+
+def _request_host(request: Request | None) -> str:
+    if request is not None and request.url.hostname:
+        return request.url.hostname
+    if SETTINGS.app_host and SETTINGS.app_host != "0.0.0.0":
+        return SETTINGS.app_host
+    return "192.168.0.12"
+
+
+def _public_dashboard_payload(request: Request | None = None) -> PublicDashboardResponse:
+    competition = db.get_competition()
+    current_series = int(competition["current_series"])
+    config = db.get_public_dashboard_config()
+    notifications = [
+        PublicNotificationResponse(**row)
+        for row in db.list_public_notifications(limit=12)
+    ]
+    effective_host = (config.get("orchestrator_host") or "").strip() or _request_host(request)
+    effective_port_ranges = (config.get("port_ranges") or "").strip()
+    if not effective_port_ranges:
+        effective_port_ranges = _format_port_ranges(_series_listener_ports(current_series))
+    headline = (config.get("headline") or "").strip() or "Current Access Window"
+    subheadline = (config.get("subheadline") or "").strip() or (
+        "Use this board for the current orchestrator address, live challenge ports, and organizer notices."
+    )
+    return PublicDashboardResponse(
+        current_series=current_series,
+        competition_status=competition["status"],
+        orchestrator_host=effective_host,
+        port_ranges=effective_port_ranges,
+        headline=headline,
+        subheadline=subheadline,
+        updated_at=config.get("updated_at"),
+        notifications=notifications,
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {"request": request})
+
+
+@participant_app.get("/", response_class=HTMLResponse)
+def participant_dashboard(request: Request):
+    return templates.TemplateResponse(request, "participant.html", {"request": request})
+
+
+@participant_app.get("/api/public/dashboard", response_model=PublicDashboardResponse)
+def api_public_dashboard(request: Request) -> PublicDashboardResponse:
+    return _public_dashboard_payload(request)
+
+
+@app.get(
+    "/api/admin/public/config",
+    response_model=PublicDashboardConfigResponse,
+    dependencies=[Depends(require_admin_api_key)],
+)
+def api_admin_public_config() -> PublicDashboardConfigResponse:
+    return PublicDashboardConfigResponse(**db.get_public_dashboard_config())
+
+
+@app.put(
+    "/api/admin/public/config",
+    response_model=PublicDashboardConfigResponse,
+    dependencies=[Depends(require_admin_api_key)],
+)
+def api_admin_public_config_update(payload: PublicDashboardConfigUpdate) -> PublicDashboardConfigResponse:
+    config = db.set_public_dashboard_config(
+        orchestrator_host=payload.orchestrator_host.strip() if payload.orchestrator_host is not None else payload.orchestrator_host,
+        port_ranges=payload.port_ranges.strip() if payload.port_ranges is not None else payload.port_ranges,
+        headline=payload.headline.strip() if payload.headline is not None else payload.headline,
+        subheadline=payload.subheadline.strip() if payload.subheadline is not None else payload.subheadline,
+    )
+    db.add_event(
+        "admin_action",
+        "info",
+        "Updated participant dashboard settings",
+        evidence={
+            "orchestrator_host": config.get("orchestrator_host"),
+            "port_ranges": config.get("port_ranges"),
+        },
+    )
+    return PublicDashboardConfigResponse(**config)
+
+
+@app.get(
+    "/api/admin/public/notifications",
+    response_model=list[PublicNotificationResponse],
+    dependencies=[Depends(require_admin_api_key)],
+)
+def api_admin_public_notifications() -> list[PublicNotificationResponse]:
+    return [PublicNotificationResponse(**row) for row in db.list_public_notifications(limit=50)]
+
+
+@app.post(
+    "/api/admin/public/notifications",
+    response_model=PublicNotificationResponse,
+    dependencies=[Depends(require_admin_api_key)],
+)
+def api_admin_create_public_notification(payload: PublicNotificationIn) -> PublicNotificationResponse:
+    notification = db.create_public_notification(
+        message=payload.message.strip(),
+        severity=payload.severity,
+    )
+    db.add_event(
+        "admin_action",
+        "info",
+        "Created participant notification",
+        evidence={"notification_id": notification.get("id"), "severity": payload.severity},
+    )
+    return PublicNotificationResponse(**notification)
+
+
+@app.delete(
+    "/api/admin/public/notifications/{notification_id}",
+    dependencies=[Depends(require_admin_api_key)],
+)
+def api_admin_delete_public_notification(notification_id: int) -> dict[str, bool]:
+    deleted = db.delete_public_notification(notification_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="notification not found")
+    db.add_event(
+        "admin_action",
+        "info",
+        "Deleted participant notification",
+        evidence={"notification_id": notification_id},
+    )
+    return {"ok": True}
 
 
 @app.get("/api/status", response_model=StatusResponse, dependencies=[Depends(require_admin_api_key)])

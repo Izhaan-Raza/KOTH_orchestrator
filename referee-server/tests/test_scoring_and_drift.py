@@ -1109,6 +1109,8 @@ class ApiEndpointTests(unittest.TestCase):
 
         self.client = TestClient(app_module.app)
         self.addCleanup(self.client.close)
+        self.participant_client = TestClient(app_module.participant_app)
+        self.addCleanup(self.participant_client.close)
 
     def _restore_app_globals(self) -> None:
         self.app_module.db = self.original_db
@@ -1230,6 +1232,11 @@ class ApiEndpointTests(unittest.TestCase):
 
     def test_dashboard_route_renders_template(self) -> None:
         response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_participant_dashboard_route_renders_template(self) -> None:
+        response = self.participant_client.get("/")
 
         self.assertEqual(response.status_code, 200)
 
@@ -1510,6 +1517,78 @@ backend h1a_nodes
         self.assertEqual(unban_response.status_code, 200)
         self.assertEqual(unban_response.json()["status"], "active")
         self.assertEqual(unban_response.json()["offense_count"], 0)
+
+    def test_public_dashboard_endpoint_returns_derived_defaults(self) -> None:
+        self.app_module.db.set_competition_state(status="running", current_series=2)
+        cfg = """
+listen p10010
+  bind *:10010
+  server n1 192.168.0.70:10010 check
+listen p10011
+  bind *:10011
+  server n1 192.168.0.70:10011 check
+listen p10012
+  bind *:10012
+  server n1 192.168.0.70:10012 check
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            haproxy_cfg = Path(tmpdir) / "haproxy.cfg"
+            haproxy_cfg.write_text(cfg, encoding="utf-8")
+            previous_path = self.app_module.HAPROXY_CONFIG_PATH
+            self.app_module.HAPROXY_CONFIG_PATH = haproxy_cfg
+            try:
+                response = self.participant_client.get(
+                    "/api/public/dashboard",
+                    headers={"host": "172.21.0.13:9000"},
+                )
+            finally:
+                self.app_module.HAPROXY_CONFIG_PATH = previous_path
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["competition_status"], "running")
+        self.assertEqual(payload["current_series"], 2)
+        self.assertEqual(payload["orchestrator_host"], "172.21.0.13")
+        self.assertEqual(payload["port_ranges"], "10010-10012")
+        self.assertEqual(payload["headline"], "Current Access Window")
+
+    def test_admin_public_config_and_notifications_flow(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+
+        config_response = self.client.put(
+            "/api/admin/public/config",
+            json={
+                "orchestrator_host": "172.21.0.13",
+                "port_ranges": "10010-10012",
+                "headline": "Join Here",
+                "subheadline": "Use these ports for the active wave.",
+            },
+        )
+        self.assertEqual(config_response.status_code, 200)
+        self.assertEqual(config_response.json()["orchestrator_host"], "172.21.0.13")
+
+        create_response = self.client.post(
+            "/api/admin/public/notifications",
+            json={"message": "H2 is live now", "severity": "warning"},
+        )
+        self.assertEqual(create_response.status_code, 200)
+        notification_id = create_response.json()["id"]
+
+        list_response = self.client.get("/api/admin/public/notifications")
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()), 1)
+
+        public_response = self.participant_client.get("/api/public/dashboard")
+        self.assertEqual(public_response.status_code, 200)
+        public_payload = public_response.json()
+        self.assertEqual(public_payload["orchestrator_host"], "172.21.0.13")
+        self.assertEqual(public_payload["port_ranges"], "10010-10012")
+        self.assertEqual(public_payload["notifications"][0]["message"], "H2 is live now")
+
+        delete_response = self.client.delete(f"/api/admin/public/notifications/{notification_id}")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()["ok"], True)
 
     def test_recover_redeploy_endpoint_returns_paused_recovery_result(self) -> None:
         self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
