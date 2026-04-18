@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 from contextlib import asynccontextmanager
@@ -719,11 +720,36 @@ def _remote_host_telemetry(
         metrics = json.loads(metrics_out or "{}")
     except json.JSONDecodeError:
         metrics = {}
-    container_names = [
-        str(item.get("container_id") or "").strip()
-        for item in containers
-        if str(item.get("container_id") or "").strip()
-    ]
+
+    live_name_by_service: dict[str, str] = {}
+    if containers:
+        current_series = int(containers[0]["series"])
+        compose_dir = f"{SETTINGS.remote_series_root}/h{current_series}"
+        compose_ps_command = f"cd {shlex.quote(compose_dir)} && docker compose ps --format json"
+        compose_ps_code, compose_ps_out, compose_ps_err = ssh_pool.exec(host, compose_ps_command)
+        if compose_ps_code == 0:
+            for line in compose_ps_out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                service_name = str(payload.get('Service') or '').strip()
+                live_name = str(payload.get('Name') or payload.get('Names') or '').strip()
+                if service_name and live_name:
+                    live_name_by_service[service_name] = live_name
+        elif compose_ps_err.strip():
+            logger.warning("docker compose ps failed on %s: %s", host, compose_ps_err.strip())
+
+    container_specs: list[tuple[str, str]] = []
+    for item in containers:
+        service_name = _compose_service_name(int(item["series"]), str(item["variant"]))
+        live_name = live_name_by_service.get(service_name) or service_name
+        container_specs.append((service_name, live_name))
+
+    container_names = [live_name for _, live_name in container_specs if live_name]
     stats_index: dict[str, dict] = {}
     inspect_index: dict[str, dict] = {}
 
@@ -760,10 +786,7 @@ def _remote_host_telemetry(
             logger.warning("docker inspect failed on %s: %s", host, inspect_err.strip())
 
     telemetry: list[ContainerTelemetryResponse] = []
-    for item in containers:
-        query_name = str(item.get("container_id") or "").strip() or _compose_service_name(
-            int(item["series"]), str(item["variant"])
-        )
+    for item, (_, query_name) in zip(containers, container_specs):
         stats = stats_index.get(query_name, {})
         inspect = inspect_index.get(query_name, {})
         state = inspect.get("State", {})
