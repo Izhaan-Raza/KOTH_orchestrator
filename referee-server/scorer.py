@@ -13,6 +13,7 @@ class VariantWinner:
     mtime_epoch: int
     node_host: str
     supporting_nodes: int
+    reason: str
 
 
 def resolve_earliest_winners(
@@ -73,6 +74,7 @@ def resolve_earliest_winners(
                     mtime_epoch=chosen.king_mtime_epoch,
                     node_host=chosen.node_host,
                     supporting_nodes=len(supporting),
+                    reason="current_owner_quorum",
                 )
                 continue
 
@@ -92,6 +94,7 @@ def resolve_earliest_winners(
             mtime_epoch=chosen.king_mtime_epoch,
             node_host=chosen.node_host,
             supporting_nodes=supporting_nodes,
+            reason="earliest_quorum",
         )
 
     return winners

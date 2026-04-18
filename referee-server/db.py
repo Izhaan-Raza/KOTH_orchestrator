@@ -104,6 +104,20 @@ class Database:
                     PRIMARY KEY (series, variant)
                 );
 
+                CREATE TABLE IF NOT EXISTS claim_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    poll_cycle INTEGER NOT NULL,
+                    series INTEGER NOT NULL,
+                    node_host TEXT NOT NULL,
+                    variant TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    king TEXT,
+                    king_mtime_epoch INTEGER,
+                    observed_at TEXT NOT NULL,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    selection_reason TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS competition (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     status TEXT NOT NULL DEFAULT 'stopped',
@@ -154,10 +168,6 @@ class Database:
                 """,
                 (now,),
             )
-
-    def close(self) -> None:
-        with self._lock:
-            self._conn.close()
 
     def _ensure_column(self, conn: sqlite3.Connection, *, table: str, column: str, definition: str) -> None:
         rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -471,14 +481,33 @@ class Database:
                 ),
             )
 
-    def list_containers(self) -> list[dict[str, Any]]:
+    def list_containers(
+        self,
+        *,
+        series: int | None = None,
+        machine_hosts: tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        where_parts: list[str] = []
+        params: list[Any] = []
+        if series is not None:
+            where_parts.append("series=?")
+            params.append(series)
+        if machine_hosts:
+            placeholders = ", ".join("?" for _ in machine_hosts)
+            where_parts.append(f"machine_host IN ({placeholders})")
+            params.extend(machine_hosts)
+        where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self._lock:
             rows = self._conn.execute(
                 """
                 SELECT machine_host, variant, container_id, series, status, king, king_mtime_epoch, last_checked
                 FROM containers
-                ORDER BY machine_host, variant
                 """
+                + where
+                + """
+                ORDER BY machine_host, variant
+                """,
+                tuple(params),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -601,6 +630,56 @@ class Database:
                 ),
             )
 
+    def add_claim_observations(self, observations: list[dict[str, Any]]) -> None:
+        if not observations:
+            return
+        with self.tx() as conn:
+            conn.executemany(
+                """
+                INSERT INTO claim_observations (
+                    poll_cycle, series, node_host, variant, status, king, king_mtime_epoch,
+                    observed_at, selected, selection_reason
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        item["poll_cycle"],
+                        item["series"],
+                        item["node_host"],
+                        item["variant"],
+                        item["status"],
+                        item.get("king"),
+                        item.get("king_mtime_epoch"),
+                        item["observed_at"],
+                        1 if item.get("selected") else 0,
+                        item.get("selection_reason"),
+                    )
+                    for item in observations
+                ],
+            )
+
+    def list_claim_observations(self, *, limit: int, series: int | None = None) -> list[dict[str, Any]]:
+        where = ""
+        params: list[Any] = []
+        if series is not None:
+            where = "WHERE series=?"
+            params.append(series)
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT id, poll_cycle, series, node_host, variant, status, king, king_mtime_epoch,
+                       observed_at, selected, selection_reason
+                FROM claim_observations
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def reset_for_new_competition(self) -> None:
         with self.tx() as conn:
             conn.execute("DELETE FROM point_events")
@@ -609,6 +688,7 @@ class Database:
             conn.execute("DELETE FROM containers")
             conn.execute("DELETE FROM baselines")
             conn.execute("DELETE FROM variant_ownership")
+            conn.execute("DELETE FROM claim_observations")
             conn.execute(
                 """
                 UPDATE teams

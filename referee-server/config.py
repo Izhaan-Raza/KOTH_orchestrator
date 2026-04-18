@@ -79,6 +79,8 @@ class Settings:
     poll_interval_seconds: int = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
     rotation_interval_seconds: int = int(os.getenv("ROTATION_INTERVAL_SECONDS", "3600"))
     points_per_cycle: float = float(os.getenv("POINTS_PER_CYCLE", "1.0"))
+    deploy_health_timeout_seconds: int = int(os.getenv("DEPLOY_HEALTH_TIMEOUT_SECONDS", "45"))
+    deploy_health_poll_seconds: int = int(os.getenv("DEPLOY_HEALTH_POLL_SECONDS", "3"))
 
     # <REMOTE_SERIES_ROOT>/h{series}/docker-compose.yml on each challenge node
     remote_series_root: str = os.getenv("REMOTE_SERIES_ROOT", "/opt/KOTH_orchestrator")
@@ -95,6 +97,8 @@ class Settings:
     allow_start_without_teams: bool = _as_bool(
         os.getenv("ALLOW_START_WITHOUT_TEAMS", "false"), default=False
     )
+    referee_log_path: Path = Path(os.getenv("REFEREE_LOG_PATH", "./referee.log"))
+    haproxy_log_path: Path = Path(os.getenv("HAPROXY_LOG_PATH", "/var/log/haproxy.log"))
 
     static_dir: Path = Path(__file__).parent / "static"
     templates_dir: Path = Path(__file__).parent / "templates"
@@ -121,6 +125,10 @@ class Settings:
             raise RuntimeError("VARIANTS must define at least one variant")
         if self.total_series < 1:
             raise RuntimeError("TOTAL_SERIES must be >= 1")
+        if self.deploy_health_timeout_seconds < 1:
+            raise RuntimeError("DEPLOY_HEALTH_TIMEOUT_SECONDS must be >= 1")
+        if self.deploy_health_poll_seconds < 1:
+            raise RuntimeError("DEPLOY_HEALTH_POLL_SECONDS must be >= 1")
 
 
 SETTINGS = Settings()

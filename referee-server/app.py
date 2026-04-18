@@ -4,6 +4,7 @@ import re
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -14,10 +15,12 @@ from fastapi.templating import Jinja2Templates
 from config import SETTINGS
 from db import Database
 from models import (
+    ClaimObservationResponse,
     EventResponse,
     LbServerResponse,
     LbServiceResponse,
     LbStatusResponse,
+    LogTailResponse,
     RecoveryResponse,
     RuntimeResponse,
     SkipRequest,
@@ -28,8 +31,12 @@ from models import (
     ValidationResponse,
 )
 from poller import Poller
+from runtime_logging import configure_logging
 from scheduler import RefereeRuntime, RuntimeGuardError
 from ssh_client import SSHClientPool
+
+configure_logging(SETTINGS.referee_log_path)
+logger = logging.getLogger("koth.referee")
 
 db = Database(SETTINGS.db_path)
 db.initialize()
@@ -304,11 +311,15 @@ def api_status() -> StatusResponse:
 
     teams = db.list_teams()
     active_teams = len([t for t in teams if t["status"] != "banned"])
-    containers = db.list_containers()
+    current_series = int(comp["current_series"])
+    containers = db.list_containers(
+        series=current_series if current_series > 0 else None,
+        machine_hosts=SETTINGS.node_hosts,
+    )
 
     return StatusResponse(
         competition_status=comp["status"],
-        current_series=int(comp["current_series"]),
+        current_series=current_series,
         next_rotation_seconds=next_rotation_seconds,
         active_teams=active_teams,
         containers=containers,
@@ -347,6 +358,61 @@ def api_runtime() -> RuntimeResponse:
 @app.get("/api/lb", response_model=LbStatusResponse, dependencies=[Depends(require_admin_api_key)])
 def api_lb_status() -> LbStatusResponse:
     return _lb_status()
+
+
+def _tail_log(path: Path, *, source: str, lines: int) -> LogTailResponse:
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return LogTailResponse(
+            source=source,
+            path=str(path),
+            readable=False,
+            lines=[],
+            note="log file does not exist",
+        )
+    except PermissionError:
+        return LogTailResponse(
+            source=source,
+            path=str(path),
+            readable=False,
+            lines=[],
+            note="log file is not readable by the referee service user",
+        )
+    except OSError as exc:
+        logger.error("log tail failed for %s: %s", path, exc)
+        return LogTailResponse(
+            source=source,
+            path=str(path),
+            readable=False,
+            lines=[],
+            note=str(exc),
+        )
+    return LogTailResponse(
+        source=source,
+        path=str(path),
+        readable=True,
+        lines=content[-lines:],
+        note=None,
+    )
+
+
+@app.get("/api/logs/referee", response_model=LogTailResponse, dependencies=[Depends(require_admin_api_key)])
+def api_referee_logs(lines: int = Query(default=80, ge=1, le=500)) -> LogTailResponse:
+    return _tail_log(SETTINGS.referee_log_path, source="referee", lines=lines)
+
+
+@app.get("/api/logs/haproxy", response_model=LogTailResponse, dependencies=[Depends(require_admin_api_key)])
+def api_haproxy_logs(lines: int = Query(default=80, ge=1, le=500)) -> LogTailResponse:
+    return _tail_log(SETTINGS.haproxy_log_path, source="haproxy", lines=lines)
+
+
+@app.get("/api/claims", response_model=list[ClaimObservationResponse], dependencies=[Depends(require_admin_api_key)])
+def api_claims(
+    limit: int = Query(default=60, ge=1, le=500),
+    series: int | None = Query(default=None, ge=1),
+) -> list[ClaimObservationResponse]:
+    return [ClaimObservationResponse(**row) for row in db.list_claim_observations(limit=limit, series=series)]
 
 
 @app.get("/api/teams", response_model=list[TeamResponse], dependencies=[Depends(require_admin_api_key)])

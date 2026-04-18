@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import logging
 
 import httpx
 
 from config import SETTINGS
+
+logger = logging.getLogger("koth.referee")
 
 
 async def send_webhook(payload: dict) -> None:
@@ -14,8 +17,8 @@ async def send_webhook(payload: dict) -> None:
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             await client.post(SETTINGS.webhook_url, json=payload)
-    except Exception:
-        return
+    except Exception as exc:
+        logger.error("webhook delivery failed: %s", exc)
 
 
 def fire_and_forget(payload: dict) -> None:

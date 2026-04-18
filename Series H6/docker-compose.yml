@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     image: machineh6a
     restart: unless-stopped
+    privileged: true
     ports:
       - "10050:3632"    # distcc CVE-2004-2687
       - "10051:2049"    # NFS no_root_squash

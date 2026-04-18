@@ -100,6 +100,28 @@ class RecoveryResponse(BaseModel):
     detail: str
 
 
+class ClaimObservationResponse(BaseModel):
+    id: int
+    poll_cycle: int
+    series: int
+    node_host: str
+    variant: Literal["A", "B", "C"]
+    status: str
+    king: str | None
+    king_mtime_epoch: int | None
+    observed_at: datetime
+    selected: bool
+    selection_reason: str | None
+
+
+class LogTailResponse(BaseModel):
+    source: Literal["referee", "haproxy"]
+    path: str
+    readable: bool
+    lines: list[str]
+    note: str | None = None
+
+
 class SkipRequest(BaseModel):
     target_series: int = Field(ge=1)
 

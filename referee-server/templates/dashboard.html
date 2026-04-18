@@ -255,6 +255,44 @@
             </table>
           </div>
         </article>
+
+        <article class="panel">
+          <header class="panel-head">
+            <h2>Claim Trace</h2>
+            <p>Per-poll observed claims and selected winners.</p>
+          </header>
+          <div class="table-wrap tall">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Variant</th>
+                  <th>Node</th>
+                  <th>Claim</th>
+                  <th>Status</th>
+                  <th>Picked</th>
+                </tr>
+              </thead>
+              <tbody id="claimsTable"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <header class="panel-head">
+            <h2>Referee Log</h2>
+            <p>Structured runtime log tail.</p>
+          </header>
+          <pre id="refereeLog" class="logbox tall-log">loading...</pre>
+        </article>
+
+        <article class="panel">
+          <header class="panel-head">
+            <h2>HAProxy Log</h2>
+            <p>Frontend connection log tail.</p>
+          </header>
+          <pre id="haproxyLog" class="logbox tall-log">loading...</pre>
+        </article>
       </aside>
     </section>
   </main>
@@ -562,6 +600,30 @@
         .join('');
     }
 
+    function renderClaims(claims) {
+      document.getElementById('claimsTable').innerHTML = claims
+        .map(claim => `
+          <tr>
+            <td class="mono">${formatTimestamp(claim.observed_at)}</td>
+            <td>${escapeHtml(claim.variant)}</td>
+            <td>${escapeHtml(claim.node_host)}</td>
+            <td>${escapeHtml(textOrFallback(claim.king))}</td>
+            <td><span class="pill ${pillToneClass(claim.status)}">${escapeHtml(claim.status)}</span></td>
+            <td>${claim.selected ? `<span class="pill tone-ok">${escapeHtml(claim.selection_reason || 'selected')}</span>` : escapeHtml(claim.selection_reason || '')}</td>
+          </tr>
+        `)
+        .join('');
+    }
+
+    function renderLogBox(elementId, payload) {
+      const element = document.getElementById(elementId);
+      if (!payload.readable) {
+        element.textContent = `${payload.path}\n${payload.note || 'log unavailable'}`;
+        return;
+      }
+      element.textContent = payload.lines.length ? payload.lines.join('\n') : '(no log lines)';
+    }
+
     function renderLb(lb) {
       document.getElementById('lbServices').textContent = lb.services.length;
       document.getElementById('lbInbound').textContent = lb.total_inbound_connections;
@@ -669,18 +731,24 @@
           logAction('enter the admin API key to load runtime data');
           return;
         }
-        const [status, runtime, teams, events, lb] = await Promise.all([
+        const [status, runtime, teams, events, lb, claims, refereeLog, haproxyLog] = await Promise.all([
           getJson('/api/status'),
           getJson('/api/runtime'),
           getJson('/api/teams'),
           getJson('/api/events?limit=40'),
           getJson('/api/lb'),
+          getJson('/api/claims?limit=30'),
+          getJson('/api/logs/referee?lines=60'),
+          getJson('/api/logs/haproxy?lines=60'),
         ]);
         renderRuntime(status, runtime);
         renderTeams(teams);
         renderContainers(status.containers);
         renderEvents(events);
         renderLb(lb);
+        renderClaims(claims);
+        renderLogBox('refereeLog', refereeLog);
+        renderLogBox('haproxyLog', haproxyLog);
       } catch (error) {
         logAction(`refresh failed: ${error.message}`);
       }

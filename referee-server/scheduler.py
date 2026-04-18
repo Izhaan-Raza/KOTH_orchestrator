@@ -3,9 +3,11 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+import logging
 import statistics
 import shlex
 from threading import RLock
+import time
 from typing import Any
 
 import httpx
@@ -15,9 +17,12 @@ from config import SETTINGS
 from db import Database
 from enforcer import Enforcer
 from poller import Poller, VariantSnapshot
+from runtime_logging import log_structured
 from scorer import resolve_earliest_winners
 from ssh_client import SSHClientPool
 from webhook import fire_and_forget
+
+logger = logging.getLogger("koth.referee")
 
 
 class RuntimeGuardError(RuntimeError):
@@ -100,8 +105,17 @@ class RefereeRuntime:
             response = httpx.get(url, timeout=8)
             response.raise_for_status()
             payload = response.json()
-            return [item["name"].strip() for item in payload if item.get("name")]
-        except Exception:
+            team_names = [item["name"].strip() for item in payload if item.get("name")]
+            log_structured(logger, logging.INFO, "backend_teams_loaded", url=url, teams=len(team_names))
+            return team_names
+        except Exception as exc:
+            log_structured(logger, logging.ERROR, "backend_teams_failed", url=url, error=str(exc))
+            self.db.add_event(
+                event_type="integration",
+                severity="critical",
+                detail="Failed to load teams from backend",
+                evidence={"url": url, "error": str(exc)},
+            )
             return []
 
     def _post_final_scores(self, series_completed: int) -> None:
@@ -115,8 +129,25 @@ class RefereeRuntime:
         }
         url = f"{SETTINGS.backend_url.rstrip('/')}/teams/points"
         try:
-            httpx.post(url, json=body, timeout=8)
-        except Exception:
+            response = httpx.post(url, json=body, timeout=8)
+            response.raise_for_status()
+            log_structured(logger, logging.INFO, "backend_scores_posted", url=url, series_completed=series_completed)
+        except Exception as exc:
+            log_structured(
+                logger,
+                logging.ERROR,
+                "backend_scores_failed",
+                url=url,
+                series_completed=series_completed,
+                error=str(exc),
+            )
+            self.db.add_event(
+                event_type="integration",
+                severity="critical",
+                series=series_completed,
+                detail="Failed to post final scores to backend",
+                evidence={"url": url, "error": str(exc)},
+            )
             return
 
     def _ensure_team_roster_available(self) -> None:
@@ -181,7 +212,7 @@ class RefereeRuntime:
             f"cd {series_dir} && "
             f"container_id=\"$(docker-compose ps -q {service} 2>/dev/null | head -n 1)\"; "
             "if [ -z \"$container_id\" ]; then echo CONTAINER_NOT_FOUND; exit 1; fi; "
-            f"docker exec \"$container_id\" sh -lc {shlex.quote(container_script)}"
+            f"docker exec -u 0 \"$container_id\" sh -lc {shlex.quote(container_script)}"
         )
         try:
             code, out, err = self.ssh_pool.exec(host, full_command)
@@ -547,6 +578,20 @@ class RefereeRuntime:
             detail=detail,
             evidence=evidence,
         )
+        log_structured(
+            logger,
+            logging.INFO if severity == "info" else logging.WARNING if severity == "warning" else logging.ERROR,
+            "event_recorded",
+            event_id=event_id,
+            event_type=event_type,
+            severity=severity,
+            machine=machine,
+            variant=variant,
+            series=series,
+            team_name=team_name,
+            detail=detail,
+            evidence=evidence,
+        )
         fire_and_forget(
             {
                 "event_id": event_id,
@@ -577,6 +622,86 @@ class RefereeRuntime:
                 king_mtime_epoch=snap.king_mtime_epoch,
                 last_checked=snap.checked_at.isoformat(),
             )
+
+    def _record_claim_observations(
+        self,
+        *,
+        series: int,
+        poll_cycle: int,
+        snapshots: list[VariantSnapshot],
+        winners: dict[str, Any],
+        matrix_issues: list[str],
+        insufficient_variants: set[str],
+    ) -> None:
+        by_variant: dict[str, list[VariantSnapshot]] = {variant: [] for variant in SETTINGS.variants}
+        for snap in snapshots:
+            by_variant.setdefault(snap.variant, []).append(snap)
+
+        observations: list[dict[str, Any]] = []
+        for variant, entries in by_variant.items():
+            winner = winners.get(variant)
+            if matrix_issues:
+                selection_reason = "incomplete_snapshot_matrix"
+            elif variant in insufficient_variants:
+                selection_reason = "insufficient_healthy_replicas"
+            elif winner is None:
+                running_claims = [
+                    entry for entry in entries
+                    if entry.status == "running"
+                    and entry.king is not None
+                    and entry.king.lower() != "unclaimed"
+                    and self.poller.is_valid_team_claim(entry.king)
+                    and entry.king_mtime_epoch is not None
+                ]
+                selection_reason = "no_quorum" if running_claims else "no_valid_claims"
+            else:
+                selection_reason = winner.reason
+
+            claims = [
+                {
+                    "host": entry.node_host,
+                    "status": entry.status,
+                    "king": entry.king,
+                    "mtime_epoch": entry.king_mtime_epoch,
+                }
+                for entry in sorted(entries, key=lambda item: item.node_host)
+            ]
+            log_structured(
+                logger,
+                logging.INFO,
+                "poll_variant_decision",
+                poll_cycle=poll_cycle,
+                series=series,
+                variant=variant,
+                selection_reason=selection_reason,
+                winner_team=(winner.team_name if winner else None),
+                winner_host=(winner.node_host if winner else None),
+                winner_mtime_epoch=(winner.mtime_epoch if winner else None),
+                supporting_nodes=(winner.supporting_nodes if winner else 0),
+                claims=claims,
+            )
+            for entry in entries:
+                observations.append(
+                    {
+                        "poll_cycle": poll_cycle,
+                        "series": series,
+                        "node_host": entry.node_host,
+                        "variant": entry.variant,
+                        "status": entry.status,
+                        "king": entry.king,
+                        "king_mtime_epoch": entry.king_mtime_epoch,
+                        "observed_at": entry.checked_at.isoformat(),
+                        "selected": (
+                            winner is not None
+                            and entry.node_host == winner.node_host
+                            and entry.variant == winner.variant
+                            and entry.king == winner.team_name
+                            and entry.king_mtime_epoch == winner.mtime_epoch
+                        ),
+                        "selection_reason": selection_reason,
+                    }
+                )
+        self.db.add_claim_observations(observations)
 
     def _capture_baselines(self, series: int, snapshots: list[VariantSnapshot]) -> None:
         for snap in snapshots:
@@ -790,23 +915,47 @@ class RefereeRuntime:
                     evidence={"output": output[:1000]},
                 )
 
-        baseline_snaps, _ = self.poller.run_cycle(series=series)
-        self._mark_clock_drift_degraded(series=series, snapshots=baseline_snaps)
-        self._apply_container_updates(series, baseline_snaps)
-        self._log_series_health(series=series, snapshots=baseline_snaps)
-
-        issues = self._evaluate_series_health(
-            series=series,
-            snapshots=baseline_snaps,
-            deploy_results=up_results,
-        )
-        if issues:
-            raise RuntimeGuardError(
-                f"Series H{series} failed deployment health gate: " + "; ".join(issues)
+        deadline = time.monotonic() + SETTINGS.deploy_health_timeout_seconds
+        attempt = 0
+        baseline_snaps: list[VariantSnapshot] = []
+        issues: list[str] = []
+        while True:
+            attempt += 1
+            baseline_snaps, _ = self.poller.run_cycle(series=series)
+            self._mark_clock_drift_degraded(series=series, snapshots=baseline_snaps)
+            self._apply_container_updates(series, baseline_snaps)
+            issues = self._evaluate_series_health(
+                series=series,
+                snapshots=baseline_snaps,
+                deploy_results=up_results,
             )
+            if not issues:
+                if attempt > 1:
+                    log_structured(
+                        logger,
+                        logging.INFO,
+                        "deploy_health_recovered",
+                        series=series,
+                        attempts=attempt,
+                    )
+                self._capture_baselines(series=series, snapshots=baseline_snaps)
+                return baseline_snaps
+            if time.monotonic() >= deadline:
+                break
+            log_structured(
+                logger,
+                logging.WARNING,
+                "deploy_health_retry",
+                series=series,
+                attempt=attempt,
+                issues=issues,
+            )
+            time.sleep(SETTINGS.deploy_health_poll_seconds)
 
-        self._capture_baselines(series=series, snapshots=baseline_snaps)
-        return baseline_snaps
+        self._log_series_health(series=series, snapshots=baseline_snaps)
+        raise RuntimeGuardError(
+            f"Series H{series} failed deployment health gate: " + "; ".join(issues)
+        )
 
     def _mark_clock_drift_degraded(self, *, series: int, snapshots: list[VariantSnapshot]) -> set[str]:
         epochs: dict[str, int] = {}
@@ -1015,6 +1164,14 @@ class RefereeRuntime:
                 for row in self.db.list_variant_owners(series=series)
             }
             winners = resolve_earliest_winners(snapshots, current_owners=current_owners)
+            self._record_claim_observations(
+                series=series,
+                poll_cycle=poll_cycle,
+                snapshots=snapshots,
+                winners=winners,
+                matrix_issues=matrix_issues,
+                insufficient_variants=insufficient_variants,
+            )
             for variant, winner in winners.items():
                 if matrix_issues:
                     continue
@@ -1158,6 +1315,20 @@ class RefereeRuntime:
                     continue
                 action = team_actions.get(team, "warning")
                 for hit in hits:
+                    log_structured(
+                        logger,
+                        logging.WARNING,
+                        "violation_detected",
+                        poll_cycle=poll_cycle,
+                        team_name=team,
+                        machine=node_host,
+                        variant=variant,
+                        series=series,
+                        offense_id=hit.offense_id,
+                        offense_name=hit.offense_name,
+                        evidence=hit.evidence,
+                        action=action,
+                    )
                     self.enforcer.record_violation(
                         team_name=team,
                         machine=node_host,

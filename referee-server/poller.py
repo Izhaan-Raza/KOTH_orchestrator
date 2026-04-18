@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import shlex
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,6 +15,7 @@ from ssh_client import SSHClientPool
 VARIANT_START = re.compile(r"^===VARIANT:([A-Z])===$")
 SECTION_LINE = re.compile(r"^===([A-Z_]+)===$")
 MISSING_HASH = "__MISSING__"
+logger = logging.getLogger("koth.referee")
 
 
 @dataclass
@@ -58,11 +60,12 @@ if [ -z "$container_id" ]; then
   echo "CONTAINER_NOT_FOUND";
   echo "===END_VARIANT===";
 else
-docker exec "$container_id" sh -lc '
+docker exec -u 0 "$container_id" sh -lc '
   echo "===NODE_EPOCH===";
   date +%s 2>/dev/null || echo "EPOCH_FAIL";
   echo "===KING===";
   cat /root/king.txt 2>/dev/null || echo "FILE_MISSING";
+  printf "\\n";
   echo "===KING_STAT===";
   stat -c "%Y %a %U:%G %F" /root/king.txt 2>/dev/null || echo "STAT_FAIL";
   echo "===ROOT_DIR===";
@@ -195,6 +198,8 @@ fi;
         if not raw:
             return None
         line = raw.splitlines()[0].strip()
+        if "===" in line:
+            line = line.split("===", 1)[0].strip()
         if not line or line == "FILE_MISSING":
             return None
         return line
@@ -306,6 +311,7 @@ fi;
                 try:
                     code, out, err = future.result()
                     if code != 0 and not out.strip():
+                        logger.warning("probe unreachable host=%s error=%s", host, err.strip())
                         snap_time = datetime.now(UTC)
                         for variant in SETTINGS.variants:
                             snapshots.append(
@@ -323,6 +329,7 @@ fi;
 
                     parsed = self._parse_snapshots(host, out)
                     if not parsed:
+                        logger.warning("probe parse failure host=%s stderr=%s", host, err.strip())
                         snap_time = datetime.now(UTC)
                         for variant in SETTINGS.variants:
                             snapshots.append(
@@ -349,6 +356,7 @@ fi;
                         if hits:
                             violations[(snap.node_host, snap.variant)] = hits
                 except Exception as exc:
+                    logger.exception("probe execution exception host=%s", host)
                     snap_time = datetime.now(UTC)
                     for variant in SETTINGS.variants:
                         snapshots.append(

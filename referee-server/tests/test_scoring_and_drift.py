@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 from pathlib import Path
 import sys
+import itertools
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -239,6 +240,9 @@ class RuntimeSafetyTests(unittest.TestCase):
 
     def test_start_competition_rolls_back_failed_deploy(self) -> None:
         runtime, db = self.make_runtime()
+        original_timeout = SETTINGS.deploy_health_timeout_seconds
+        object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", 1)
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", original_timeout))
         db.upsert_team_names(["Team Alpha"])
 
         def compose(series: int, command: str):
@@ -251,8 +255,12 @@ class RuntimeSafetyTests(unittest.TestCase):
         runtime._run_compose_parallel = Mock(side_effect=compose)
         runtime.poller.run_cycle = Mock(return_value=([], {}))
 
-        with self.assertRaises(RuntimeGuardError):
-            runtime.start_competition()
+        with patch("scheduler.fire_and_forget", lambda payload: None), patch(
+            "scheduler.time.sleep",
+            return_value=None,
+        ), patch("scheduler.time.monotonic", side_effect=[0, 0, 2, 2]):
+            with self.assertRaises(RuntimeGuardError):
+                runtime.start_competition()
 
         state = db.get_competition()
         self.assertEqual(state["status"], "stopped")
@@ -265,6 +273,9 @@ class RuntimeSafetyTests(unittest.TestCase):
 
     def test_rotate_to_series_pauses_on_failed_health_gate(self) -> None:
         runtime, db = self.make_runtime()
+        original_timeout = SETTINGS.deploy_health_timeout_seconds
+        object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", 1)
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", original_timeout))
         db.upsert_team_names(["Team Alpha"])
         db.set_competition_state(status="running", current_series=1)
         runtime.poll_once = Mock()
@@ -285,10 +296,14 @@ class RuntimeSafetyTests(unittest.TestCase):
                 {},
             ]
         )
-        runtime.poller.run_cycle = Mock(side_effect=[([], {}), ([], {})])
+        runtime.poller.run_cycle = Mock(side_effect=itertools.repeat(([], {})))
 
-        with self.assertRaises(RuntimeGuardError):
-            runtime.rotate_to_series(2)
+        with patch("scheduler.fire_and_forget", lambda payload: None), patch(
+            "scheduler.time.sleep",
+            return_value=None,
+        ), patch("scheduler.time.monotonic", side_effect=[0, 2, 0, 2]):
+            with self.assertRaises(RuntimeGuardError):
+                runtime.rotate_to_series(2)
 
         state = db.get_competition()
         self.assertEqual(state["status"], "faulted")
@@ -297,6 +312,9 @@ class RuntimeSafetyTests(unittest.TestCase):
 
     def test_rotate_to_series_rolls_back_previous_series_after_failed_target_deploy(self) -> None:
         runtime, db = self.make_runtime()
+        original_timeout = SETTINGS.deploy_health_timeout_seconds
+        object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", 1)
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", original_timeout))
         db.upsert_team_names(["Team Alpha"])
         db.increment_team_offense("Team Alpha")
         db.increment_team_offense("Team Alpha")
@@ -327,7 +345,11 @@ class RuntimeSafetyTests(unittest.TestCase):
         ]
         runtime.poller.run_cycle = Mock(side_effect=[([], {}), (healthy_snapshots, {})])
 
-        runtime.rotate_to_series(2)
+        with patch("scheduler.fire_and_forget", lambda payload: None), patch(
+            "scheduler.time.sleep",
+            return_value=None,
+        ), patch("scheduler.time.monotonic", side_effect=[0, 2, 0]):
+            runtime.rotate_to_series(2)
 
         state = db.get_competition()
         self.assertEqual(state["status"], "running")
@@ -369,6 +391,43 @@ class RuntimeSafetyTests(unittest.TestCase):
         state = db.get_competition()
         self.assertEqual(state["status"], "running")
         self.assertEqual(state["current_series"], 2)
+
+    def test_deploy_series_or_raise_retries_until_health_recovers(self) -> None:
+        runtime, db = self.make_runtime()
+        original_timeout = SETTINGS.deploy_health_timeout_seconds
+        object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", 1)
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", original_timeout))
+        runtime._run_compose_parallel = Mock(return_value={})
+        bad_snapshots = [
+            _snapshot(node_host="192.168.0.102", variant="A", king=None, king_mtime_epoch=None, status="failed"),
+            _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.103", variant="A", king=None, king_mtime_epoch=None, status="failed"),
+            _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
+        ]
+        good_snapshots = [
+            _snapshot(node_host="192.168.0.102", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.102", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.102", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.103", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.103", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.103", variant="C", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="A", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="B", king="unclaimed"),
+            _snapshot(node_host="192.168.0.106", variant="C", king="unclaimed"),
+        ]
+        runtime.poller.run_cycle = Mock(side_effect=[(bad_snapshots, {}), (good_snapshots, {})])
+        with patch("scheduler.fire_and_forget", lambda payload: None), patch(
+            "scheduler.time.sleep",
+            return_value=None,
+        ), patch("scheduler.time.monotonic", side_effect=[0, 0]):
+            result = runtime._deploy_series_or_raise(series=2)
+        self.assertEqual(len(result), 9)
+        self.assertEqual(runtime.poller.run_cycle.call_count, 2)
 
     def test_baseline_violation_detects_missing_to_present_authkeys(self) -> None:
         runtime, db = self.make_runtime()
@@ -753,6 +812,9 @@ class RuntimeSafetyTests(unittest.TestCase):
 
     def test_recover_current_series_failure_remains_faulted(self) -> None:
         runtime, db = self.make_runtime()
+        original_timeout = SETTINGS.deploy_health_timeout_seconds
+        object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", 1)
+        self.addCleanup(lambda: object.__setattr__(SETTINGS, "deploy_health_timeout_seconds", original_timeout))
         db.set_competition_state(status="faulted", current_series=2, fault_reason="broken")
 
         def compose(series: int, command: str):
@@ -763,8 +825,12 @@ class RuntimeSafetyTests(unittest.TestCase):
         runtime._run_compose_parallel = Mock(side_effect=compose)
         runtime.poller.run_cycle = Mock(return_value=([], {}))
 
-        with self.assertRaises(RuntimeGuardError):
-            runtime.recover_current_series()
+        with patch("scheduler.fire_and_forget", lambda payload: None), patch(
+            "scheduler.time.sleep",
+            return_value=None,
+        ), patch("scheduler.time.monotonic", side_effect=[0, 0, 2, 2]):
+            with self.assertRaises(RuntimeGuardError):
+                runtime.recover_current_series()
 
         state = db.get_competition()
         self.assertEqual(state["status"], "faulted")
@@ -829,6 +895,17 @@ class PollerCompletenessTests(unittest.TestCase):
         hits = poller._detect_violations(snap)
 
         self.assertFalse(any(hit.offense_name == "watchdog_process" for hit in hits))
+
+    def test_probe_command_uses_root_exec_and_separates_king_section(self) -> None:
+        poller = Poller(DummySSH())
+
+        command = poller._build_probe_command(series=2)
+
+        self.assertIn('docker exec -u 0 "$container_id" sh -lc', command)
+        self.assertIn('printf "\\n";', command)
+
+    def test_normalize_king_strips_inline_section_marker(self) -> None:
+        self.assertEqual(Poller._normalize_king("unclaimed===KING_STAT==="), "unclaimed")
 
 
 class ConfigLoadingTests(unittest.TestCase):
@@ -932,6 +1009,39 @@ class ApiEndpointTests(unittest.TestCase):
         self.assertIn("poll", payload["active_jobs"])
         self.assertIn("rotate", payload["active_jobs"])
 
+    def test_status_endpoint_filters_stale_container_hosts(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        valid_host = self.app_module.SETTINGS.node_hosts[0]
+        self.app_module.db.upsert_container_status(
+            machine_host="10.0.0.9",
+            variant="A",
+            container_id="stale",
+            series=5,
+            status="running",
+            king="unclaimed",
+            king_mtime_epoch=1,
+            last_checked=datetime.now(UTC).isoformat(),
+        )
+        self.app_module.db.upsert_container_status(
+            machine_host=valid_host,
+            variant="A",
+            container_id="fresh",
+            series=5,
+            status="running",
+            king="unclaimed",
+            king_mtime_epoch=1,
+            last_checked=datetime.now(UTC).isoformat(),
+        )
+        self.app_module.db.set_competition_state(status="running", current_series=5)
+
+        response = self.client.get("/api/status")
+
+        self.assertEqual(response.status_code, 200)
+        hosts = {item["machine_host"] for item in response.json()["containers"]}
+        self.assertNotIn("10.0.0.9", hosts)
+        self.assertEqual(hosts, {valid_host})
+
     def test_runtime_endpoint_requires_admin_key(self) -> None:
         response = self.client.get("/api/runtime")
         self.assertEqual(response.status_code, 401)
@@ -980,6 +1090,11 @@ backend h1a_nodes
         response = self.client.get("/api/lb")
         self.assertEqual(response.status_code, 401)
 
+    def test_logs_and_claims_endpoints_require_admin_key(self) -> None:
+        self.assertEqual(self.client.get("/api/logs/referee").status_code, 401)
+        self.assertEqual(self.client.get("/api/logs/haproxy").status_code, 401)
+        self.assertEqual(self.client.get("/api/claims").status_code, 401)
+
     def test_teams_and_events_endpoints_require_admin_key(self) -> None:
         self.assertEqual(self.client.get("/api/teams").status_code, 401)
         self.assertEqual(self.client.get("/api/events").status_code, 401)
@@ -1022,6 +1137,58 @@ backend h1a_nodes
         self.assertEqual(payload["total_nodes"], 3)
         self.assertEqual(payload["min_healthy_nodes"], 2)
         self.assertEqual(payload["healthy_counts_by_variant"]["A"], 3)
+
+    def test_claims_endpoint_returns_observations(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        self.app_module.db.add_claim_observations(
+            [
+                {
+                    "poll_cycle": 7,
+                    "series": 5,
+                    "node_host": "192.168.0.70",
+                    "variant": "A",
+                    "status": "running",
+                    "king": "Team Alpha",
+                    "king_mtime_epoch": 1234,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "selected": True,
+                    "selection_reason": "earliest_quorum",
+                }
+            ]
+        )
+
+        response = self.client.get("/api/claims?limit=10")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload), 1)
+        self.assertTrue(payload[0]["selected"])
+        self.assertEqual(payload[0]["selection_reason"], "earliest_quorum")
+
+    def test_log_endpoints_return_tail(self) -> None:
+        self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
+        self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            referee_log = Path(tmpdir) / "referee.log"
+            haproxy_log = Path(tmpdir) / "haproxy.log"
+            referee_log.write_text("a\nb\nc\n", encoding="utf-8")
+            haproxy_log.write_text("x\ny\n", encoding="utf-8")
+            original_referee = self.app_module.SETTINGS.referee_log_path
+            original_haproxy = self.app_module.SETTINGS.haproxy_log_path
+            object.__setattr__(self.app_module.SETTINGS, "referee_log_path", referee_log)
+            object.__setattr__(self.app_module.SETTINGS, "haproxy_log_path", haproxy_log)
+            try:
+                referee_response = self.client.get("/api/logs/referee?lines=2")
+                haproxy_response = self.client.get("/api/logs/haproxy?lines=1")
+            finally:
+                object.__setattr__(self.app_module.SETTINGS, "referee_log_path", original_referee)
+                object.__setattr__(self.app_module.SETTINGS, "haproxy_log_path", original_haproxy)
+
+        self.assertEqual(referee_response.status_code, 200)
+        self.assertEqual(referee_response.json()["lines"], ["b", "c"])
+        self.assertEqual(haproxy_response.status_code, 200)
+        self.assertEqual(haproxy_response.json()["lines"], ["y"])
 
     def test_team_admin_endpoint_rejects_invalid_claim_names(self) -> None:
         self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
