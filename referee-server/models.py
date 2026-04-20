@@ -247,6 +247,17 @@ class PublicNotificationIn(BaseModel):
     severity: Literal["info", "warning", "critical"] = "info"
 
 
+class PublicLeaderboardPoint(BaseModel):
+    timestamp: datetime
+    total_points: float
+
+
+class PublicLeaderboardSeries(BaseModel):
+    team_name: str
+    total_points: float
+    points: list[PublicLeaderboardPoint]
+
+
 class PublicDashboardResponse(BaseModel):
     current_series: int
     competition_status: CompetitionStatus
@@ -256,6 +267,8 @@ class PublicDashboardResponse(BaseModel):
     subheadline: str
     updated_at: datetime | None
     notifications: list[PublicNotificationResponse]
+    teams: list[TeamResponse]
+    leaderboard_series: list[PublicLeaderboardSeries]
 
 
 class WebhookPayload(BaseModel):

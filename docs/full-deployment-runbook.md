@@ -530,6 +530,8 @@ Lifecycle guidance:
 4. `/api/recover/validate` reports cluster health as `healthy_nodes`, `total_nodes`, and `min_healthy_nodes`. In the dashboard this is rendered as `healthy=X of Y nodes, minimum Z required`; `3/2` is no longer a valid interpretation.
 5. Team creation uses the same validity rules as scoring claims. Names like `unclaimed` or malformed control-character strings are rejected.
 6. Manual `unban` resets `offense_count` to `0` and returns the team to `active`, but it does not modify `total_points`.
+7. The participant board on port `9000` is separate from the admin dashboard on `8000` and should be restarted after participant-board template or payload changes.
+8. The participant board exposes organizer notices, hard-bound participant rules, the full public leaderboard, and a cumulative score graph for top-scoring teams.
 
 Stop:
 

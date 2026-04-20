@@ -1555,6 +1555,8 @@ listen p10012
     def test_admin_public_config_and_notifications_flow(self) -> None:
         self.app_module.app.dependency_overrides[self.app_module.require_admin_api_key] = lambda: None
         self.addCleanup(self.app_module.app.dependency_overrides.clear)
+        self.app_module.db.upsert_team_names(["Team Alpha"])
+        self.app_module.db.add_points("Team Alpha", "A", 2, 1.0, 7)
 
         config_response = self.client.put(
             "/api/admin/public/config",
@@ -1585,6 +1587,9 @@ listen p10012
         self.assertEqual(public_payload["orchestrator_host"], "172.21.0.13")
         self.assertEqual(public_payload["port_ranges"], "10010-10012")
         self.assertEqual(public_payload["notifications"][0]["message"], "H2 is live now")
+        self.assertEqual(public_payload["teams"][0]["name"], "Team Alpha")
+        self.assertEqual(public_payload["leaderboard_series"][0]["team_name"], "Team Alpha")
+        self.assertEqual(public_payload["leaderboard_series"][0]["points"][0]["total_points"], 1.0)
 
         delete_response = self.client.delete(f"/api/admin/public/notifications/{notification_id}")
         self.assertEqual(delete_response.status_code, 200)

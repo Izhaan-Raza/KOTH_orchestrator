@@ -7,6 +7,8 @@
 - Root-level `docker-compose.yml` and `rotate.sh` are local/dev-only artifacts and must not be treated as the production control plane.
 - Operators should use `/api/runtime`, `/api/recover/validate`, and `/api/recover/redeploy` for runtime inspection and recovery.
 - The dashboard now includes admin team controls: create teams, manually ban a team, and manually unban a team. New team names must satisfy the same claim rules as `king.txt` ownership, so reserved or malformed names such as `unclaimed` are rejected.
+- The public participant board on `:9000` now shows the current access window, organizer notices, hard-bound rules, a live leaderboard, and a cumulative score graph for the leading teams.
+- The admin dashboard on `:8000` now renders the full team table instead of truncating to the first 25 teams.
 - Manual test execution guide: [docs/manual-tester-checklist.md](docs/manual-tester-checklist.md)
 - Referee rule validation guide: [docs/referee-rule-validation-checklist.md](docs/referee-rule-validation-checklist.md)
 - Separate attacker-style Codex prompt: [docs/codex-h1a-player-prompt.md](docs/codex-h1a-player-prompt.md)

@@ -435,6 +435,10 @@
     const publicConfigDirty = new Set();
     let apiKeyRefreshTimer = null;
     let dashboardConnected = false;
+    let runtimeSnapshot = null;
+    let pollDeadlineMs = null;
+    let rotationDeadlineMs = null;
+    let countdownTimer = null;
 
     async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
       const controller = new AbortController();
@@ -508,6 +512,48 @@
       dashboardConnected = Boolean(connected);
     }
 
+    function updateRuntimeSnapshot(status, runtime, teams) {
+      runtimeSnapshot = {
+        status,
+        runtime,
+        teams,
+      };
+      pollDeadlineMs = runtime.next_poll_seconds !== null && runtime.next_poll_seconds !== undefined
+        ? Date.now() + (Number(runtime.next_poll_seconds) * 1000)
+        : null;
+      rotationDeadlineMs = runtime.next_rotation_seconds !== null && runtime.next_rotation_seconds !== undefined
+        ? Date.now() + (Number(runtime.next_rotation_seconds) * 1000)
+        : null;
+      if (!countdownTimer) {
+        countdownTimer = setInterval(() => {
+          renderLiveRuntimeSnapshot();
+        }, 1000);
+      }
+      renderLiveRuntimeSnapshot();
+    }
+
+    function currentRuntimeView() {
+      if (!runtimeSnapshot) {
+        return null;
+      }
+      const runtime = {...runtimeSnapshot.runtime};
+      if (pollDeadlineMs !== null) {
+        runtime.next_poll_seconds = Math.max(0, Math.ceil((pollDeadlineMs - Date.now()) / 1000));
+      }
+      if (rotationDeadlineMs !== null) {
+        runtime.next_rotation_seconds = Math.max(0, Math.ceil((rotationDeadlineMs - Date.now()) / 1000));
+      }
+      return runtime;
+    }
+
+    function renderLiveRuntimeSnapshot() {
+      if (!runtimeSnapshot) {
+        return;
+      }
+      const runtime = currentRuntimeView();
+      renderRuntime(runtimeSnapshot.status, runtime);
+      renderEventBrief(runtimeSnapshot.status, runtime, runtimeSnapshot.teams);
+    }
     async function post(url, body) {
       const res = await fetchWithTimeout(url, {
         method: 'POST',
@@ -584,11 +630,10 @@
         getJson('/api/teams'),
         getJson('/api/events?limit=40'),
       ]);
-      renderRuntime(status, runtime);
+      updateRuntimeSnapshot(status, runtime, teams);
       renderTeams(teams);
       renderContainers(status.containers);
       renderEvents(events);
-      renderEventBrief(status, runtime, teams);
       return {status, runtime, teams, events};
     }
 
@@ -820,7 +865,6 @@
 
     function renderTeams(teams) {
       document.getElementById('teamsTable').innerHTML = teams
-        .slice(0, 25)
         .map(team => `
           <tr>
             <td>${escapeHtml(team.name)}</td>

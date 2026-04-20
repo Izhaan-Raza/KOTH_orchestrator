@@ -400,6 +400,25 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_point_events(self, *, team_names: list[str] | None = None) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        where = ""
+        if team_names:
+            placeholders = ", ".join("?" for _ in team_names)
+            where = f"WHERE team_name IN ({placeholders})"
+            params.extend(team_names)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT team_name, points, timestamp
+                FROM point_events
+                {where}
+                ORDER BY timestamp ASC, id ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def set_team_status(
         self,
         name: str,

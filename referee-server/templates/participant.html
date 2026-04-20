@@ -73,6 +73,64 @@
         <div id="publicNotifications" class="summary-list"></div>
       </article>
     </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Hard-Bound Participant Rules</h2>
+        <p>These rules are mandatory. Any malpractice or out-of-scope exploitation may lead to immediate ban.</p>
+      </header>
+      <div class="summary-list">
+        <div class="summary-row">
+          <strong>Allowed scope:</strong>
+          Attack only the currently active challenge target through its intended exposed entry point and intended solve path.
+        </div>
+        <div class="summary-row">
+          <strong>Strict prohibition:</strong>
+          Do not exploit any vulnerability other than the intended challenge vulnerability and intended privilege-escalation path.
+        </div>
+        <div class="summary-row">
+          <strong>Infrastructure is out of bounds:</strong>
+          Do not attack the referee, dashboard, load balancer, router, host OS, nodes, non-active series, non-target variants, or supporting services.
+        </div>
+        <div class="summary-row">
+          <strong>No persistence or tampering:</strong>
+          Do not add backdoors, tunnels, cron jobs, watchdogs, new listeners, firewall changes, routing changes, or reclaim mechanisms.
+        </div>
+        <div class="summary-row">
+          <strong>Claim rule:</strong>
+          After the intended solve path, write only your exact team name into <code>/root/king.txt</code>. Do not alter file ownership, mode, type, or surrounding protections.
+        </div>
+        <div class="summary-row">
+          <strong>Immediate ban conditions:</strong>
+          Any out-of-scope exploit, sabotage, denial-of-service, platform interference, score tampering, pivoting, or other malpractice may lead to immediate ban without warning.
+        </div>
+        <div class="summary-row">
+          <strong>Interpretation rule:</strong>
+          If you are not sure whether an action is in scope, treat it as forbidden unless an operator explicitly approves it.
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Score Progression</h2>
+        <p>Time-based cumulative scoring for the current top teams.</p>
+      </header>
+      <div class="scoreboard-chart-shell">
+        <svg id="leaderboardChart" class="scoreboard-chart" viewBox="0 0 960 360" preserveAspectRatio="none" aria-label="Leaderboard score graph"></svg>
+        <div id="leaderboardLegend" class="scoreboard-legend"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <h2>Live Leaderboard</h2>
+        <p>Current team standings from the referee.</p>
+      </header>
+      <div id="publicLeaderboard" class="summary-list">
+        <div class="summary-row">Loading leaderboard...</div>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -118,6 +176,89 @@
       return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
     }
 
+    function colorForTeam(name) {
+      let hash = 0;
+      for (const ch of String(name)) {
+        hash = ((hash << 5) - hash) + ch.charCodeAt(0);
+        hash |= 0;
+      }
+      return `hsl(${Math.abs(hash) % 360} 72% 58%)`;
+    }
+
+    function renderLeaderboardChart(seriesList) {
+      const chart = document.getElementById('leaderboardChart');
+      const legend = document.getElementById('leaderboardLegend');
+      if (!seriesList.length) {
+        chart.innerHTML = '<text x="24" y="56" fill="#8d8d8d" font-size="18">No score history yet.</text>';
+        legend.innerHTML = '';
+        return;
+      }
+
+      const traces = seriesList.filter(series => series.points.length);
+      if (!traces.length) {
+        chart.innerHTML = '<text x="24" y="56" fill="#8d8d8d" font-size="18">No point events yet.</text>';
+        legend.innerHTML = '';
+        return;
+      }
+
+      const width = 960;
+      const height = 360;
+      const pad = {left: 56, right: 18, top: 18, bottom: 36};
+      const allTimes = traces.flatMap(series => series.points.map(point => new Date(point.timestamp).getTime()));
+      const allScores = traces.flatMap(series => series.points.map(point => Number(point.total_points)));
+      const minTime = Math.min(...allTimes);
+      const maxTime = Math.max(...allTimes);
+      const maxScore = Math.max(...allScores, 1);
+      const timeSpan = Math.max(maxTime - minTime, 1);
+
+      const xFor = time => pad.left + (((time - minTime) / timeSpan) * (width - pad.left - pad.right));
+      const yFor = score => height - pad.bottom - ((score / maxScore) * (height - pad.top - pad.bottom));
+
+      const gridLines = Array.from({length: 5}, (_, index) => {
+        const value = (maxScore / 4) * index;
+        const y = yFor(value);
+        return `
+          <line x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" stroke="rgba(255,255,255,0.08)" stroke-width="1" />
+          <text x="${pad.left - 10}" y="${y + 4}" text-anchor="end" fill="#8d8d8d" font-size="12">${value.toFixed(0)}</text>
+        `;
+      }).join('');
+
+      const paths = traces.map(series => {
+        const color = colorForTeam(series.team_name);
+        const d = series.points.map((point, index) => {
+          const x = xFor(new Date(point.timestamp).getTime());
+          const y = yFor(Number(point.total_points));
+          return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+        }).join(' ');
+        const lastPoint = series.points[series.points.length - 1];
+        const cx = xFor(new Date(lastPoint.timestamp).getTime());
+        const cy = yFor(Number(lastPoint.total_points));
+        return `
+          <path d="${d}" fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" />
+          <circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="4" fill="${color}" />
+        `;
+      }).join('');
+
+      chart.innerHTML = `
+        <rect x="0" y="0" width="${width}" height="${height}" fill="transparent" />
+        ${gridLines}
+        <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" />
+        <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" />
+        ${paths}
+      `;
+
+      legend.innerHTML = seriesList.map(series => {
+        const color = colorForTeam(series.team_name);
+        return `
+          <div class="legend-item">
+            <span class="legend-swatch" style="background:${color}"></span>
+            <strong>${escapeHtml(series.team_name)}</strong>
+            <span>${Number(series.total_points).toFixed(1)} pts</span>
+          </div>
+        `;
+      }).join('');
+    }
+
     function renderBoard(payload) {
       document.getElementById('publicHeadline').textContent = payload.headline;
       document.getElementById('publicSubheadline').textContent = payload.subheadline;
@@ -137,6 +278,13 @@
           <span class="hint">${escapeHtml(formatTimestamp(notification.created_at))}</span>
         </div>
       `).join('') || '<div class="summary-row">No organizer notifications right now.</div>';
+      document.getElementById('publicLeaderboard').innerHTML = payload.teams.map((team, index) => `
+        <div class="summary-row">
+          <strong>#${index + 1} ${escapeHtml(team.name)}</strong><br />
+          ${escapeHtml(team.status)} | Offenses: ${team.offense_count} | Points: ${Number(team.total_points).toFixed(1)}
+        </div>
+      `).join('') || '<div class="summary-row">No teams registered yet.</div>';
+      renderLeaderboardChart(payload.leaderboard_series || []);
     }
 
     async function refreshBoard() {

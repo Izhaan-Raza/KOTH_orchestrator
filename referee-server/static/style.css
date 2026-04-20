@@ -826,6 +826,47 @@ tbody tr:last-child td {
   letter-spacing: 0.05em;
 }
 
+.scoreboard-chart-shell {
+  display: grid;
+  gap: 12px;
+}
+
+.scoreboard-chart {
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.00) 100%),
+    rgba(10, 10, 10, 0.55);
+}
+
+.scoreboard-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.55);
+}
+
+.legend-item span:last-child {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 10px;
+}
+
 @media (max-width: 1400px) {
   .workspace {
     grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
