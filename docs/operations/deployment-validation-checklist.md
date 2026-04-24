@@ -1,6 +1,6 @@
 # Deployment Validation Checklist
 
-Use this checklist after following `docs/full-deployment-runbook.md`.
+Use this checklist after following [Full Deployment Runbook](./full-deployment-runbook.md).
 
 Mark each item explicitly as:
 

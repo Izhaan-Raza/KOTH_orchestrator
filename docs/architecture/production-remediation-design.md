@@ -472,7 +472,7 @@ The repository must present one production control plane only.
 - `referee-server/`
 - distributed node layout under `h1..h8`
 - `qa/deployment/*`
-- `docs/full-deployment-runbook.md`
+- `docs/operations/full-deployment-runbook.md`
 
 ### Demote to local-dev only
 
@@ -641,7 +641,7 @@ Why:
 
 - eliminate control-plane ambiguity.
 
-## `docs/full-deployment-runbook.md`
+## `docs/operations/full-deployment-runbook.md`
 
 Change:
 

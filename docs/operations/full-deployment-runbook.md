@@ -281,7 +281,7 @@ Additional notes:
 1. `NODE_SSH_TARGETS` must contain one entry for each `NODE_HOSTS` value.
 2. Keep `NODE_HOSTS` and `NODE_PRIORITY` as plain host/IP values. Put usernames only in `NODE_SSH_TARGETS`.
 3. `SSH_TIMEOUT_SECONDS=300` is recommended so first-time `docker compose up -d` does not fail during remote image builds.
-4. See [referee-per-node-ssh-targets.md](/opt/KOTH_orchestrator/repo/docs/referee-per-node-ssh-targets.md) for mixed-user details.
+4. See [Per-Node SSH Targets](../architecture/referee-per-node-ssh-targets.md) for mixed-user details.
 
 Generate a strong API key:
 
@@ -296,7 +296,7 @@ PY
 
 Edit `/etc/haproxy/haproxy.cfg` with frontends/backends for your exposed game ports.
 
-For the exact router/listener names and service-to-port map, use `docs/haproxy-full-config.md`. The important rule is:
+For the exact router/listener names and service-to-port map, use [HAProxy Full Config Reference](../architecture/haproxy-full-config.md). The important rule is:
 
 1. Keep the listener names and public ports stable.
 2. Update only the backend `server n1/n2/n3` host IPs unless the challenge compose port bindings changed.
