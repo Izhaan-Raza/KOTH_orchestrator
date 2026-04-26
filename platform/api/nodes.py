@@ -3,7 +3,10 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from engine.db import get_connection
-from .setup import get_db_path
+import os
+
+def get_db_path():
+    return os.environ.get("DB_PATH", "platform.db")
 
 router = APIRouter()
 
