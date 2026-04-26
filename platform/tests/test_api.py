@@ -30,7 +30,9 @@ def test_setup_status_initially_false():
     assert response.json()["is_setup"] == False
 
 def test_legacy_status_endpoint():
-    response = client.get("/api/status")
+    # legacy.router is protected now, so we need an API key
+    os.environ["ADMIN_API_KEY"] = "test-key-123"
+    response = client.get("/api/status", headers={"X-API-Key": "test-key-123"})
     assert response.status_code == 200
     assert response.json()["competition_status"] == "running"
 
