@@ -2,6 +2,9 @@
 
 Distributed King-of-the-Hill competition platform for running replicated challenge rounds with a referee-managed control plane.
 
+![GitHub stars](https://img.shields.io/github/stars/Izhaan-Raza/KOTH_orchestrator?style=for-the-badge&logo=github) ![GitHub forks](https://img.shields.io/github/forks/Izhaan-Raza/KOTH_orchestrator?style=for-the-badge&logo=github) ![GitHub issues](https://img.shields.io/github/issues/Izhaan-Raza/KOTH_orchestrator?style=for-the-badge&logo=github) ![Express.js](https://img.shields.io/badge/Express.js-000000?style=for-the-badge&logo=express&logoColor=white)
+
+
 ## What This Repository Contains
 
 - `referee-server/`: the real control plane, including the FastAPI app, scheduler, scoring, enforcement, recovery logic, dashboards, and tests
@@ -80,3 +83,18 @@ Use the docs in [`docs/README.md`](docs/README.md), especially:
 ## Safety
 
 Run this project only in infrastructure you own or are explicitly authorized to use. The challenge services are intentionally vulnerable, and parts of the QA tooling execute real exploit probes against those intentionally weak targets.
+
+## 👥 Contributing
+
+Contributions are welcome! Here's how you can help:
+
+1. **Fork** the repository
+2. **Clone** your fork: `git clone https://github.com/Izhaan-Raza/KOTH_orchestrator/tree/main.git`
+3. **Create** a new branch: `git checkout -b feature/your-feature`
+4. **Commit** your changes: `git commit -am 'Add some feature'`
+5. **Push** to your branch: `git push origin feature/your-feature`
+6. **Open** a pull request
+
+Please ensure your code follows the project's style guidelines and includes tests where applicable.
+
+---
