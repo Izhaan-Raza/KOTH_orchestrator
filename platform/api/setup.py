@@ -7,6 +7,7 @@ import yaml
 from engine.registry import register_machine
 from engine.normalizer import normalize_compose
 from api.accounts import hash_password
+import secrets
 
 router = APIRouter()
 
@@ -63,8 +64,17 @@ def initialize_platform(payload: SetupPayload, db_path: str = Depends(get_db_pat
                                 register_machine(db_path, machine_id, spec)
                             except Exception as e:
                                 pass # Skip on error
+        
+        # 4. Generate API Key
+        api_key = secrets.token_urlsafe(32)
+        os.environ["ADMIN_API_KEY"] = api_key
+        
+        # Write to .env
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+        with open(env_path, "a") as f:
+            f.write(f"\nADMIN_API_KEY={api_key}\n")
                                 
-    return {"status": "initialized"}
+    return {"status": "initialized", "api_key": api_key}
 
 @router.get("/api/setup/status")
 def setup_status(db_path: str = Depends(get_db_path)):

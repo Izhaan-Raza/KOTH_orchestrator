@@ -62,8 +62,8 @@ templates = Jinja2Templates(directory=templates_dir)
 def is_setup_complete(db_path: str) -> bool:
     try:
         with get_connection(db_path) as conn:
-            count = conn.execute("SELECT COUNT(*) FROM machines").fetchone()[0]
-            return count > 0
+            user = conn.execute("SELECT id FROM users WHERE role = 'admin' LIMIT 1").fetchone()
+            return user is not None
     except Exception:
         return False
 

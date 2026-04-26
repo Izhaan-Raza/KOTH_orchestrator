@@ -244,6 +244,8 @@
         });
 
         if (res.ok) {
+          const data = await res.json();
+          alert(`Setup Complete! Your Admin API Key is:\n\n${data.api_key}\n\nPlease copy this key. You will need to paste it into the Dashboard to authenticate.`);
           window.location.href = '/dashboard';
         } else {
           const err = await res.json();
