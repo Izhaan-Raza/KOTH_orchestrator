@@ -1,4 +1,9 @@
 #!/bin/bash
+# =============================================================================
+# LOCAL DEVELOPMENT ONLY — NOT the production control plane.
+# In production, series rotation is driven by referee-server/ over SSH.
+# See docs/operations/full-deployment-runbook.md for the real deployment model.
+# =============================================================================
 # KoTH Master Orchestrator (v1 syntax fix)
 # Usage: ./rotate.sh [ROUND_NUMBER]
 

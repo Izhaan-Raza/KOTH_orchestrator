@@ -565,3 +565,73 @@ sudo journalctl -u koth-referee -n 100 --no-pager
 5. Start competition
 6. Confirm `/api/runtime` reports `running` and no `fault_reason`
 7. Begin live traffic
+
+---
+
+## 6) Post-Restructuring Notes (2026-04-26)
+
+### Safe Rotation Protocol
+
+As of the 2026-04-26 restructuring (`production-remediation-design.md`), the rotation order has changed:
+
+| Step | Old (unsafe) | New (safe) |
+|---|---|---|
+| 1 | Final poll on Hn | Final poll on Hn |
+| 2 | Set Hn+1 → maint | Set Hn+1 → maint |
+| 3 | Set Hn → drain | Set Hn → drain |
+| 4 | **Tear down Hn** | Deploy Hn+1 (Hn still running) |
+| 5 | Deploy Hn+1 | **Validate Hn+1** (health gate) |
+| 6 | Validate | **Tear down Hn** (only if validated) |
+| 7 | Commit | Commit current_series = Hn+1 |
+
+This requires nodes to briefly run both series in parallel during the validation window (~30–60 s).
+Confirm your nodes have sufficient headroom before a live rotation.
+
+### New Fields in `/api/runtime`
+
+The `competition` row now exposes two additional timestamp fields visible via `/api/runtime`:
+
+- `paused_at` — set when an operator calls `POST /api/competition/pause`; cleared on resume
+- `rotation_started_at` — set at the beginning of any rotation or restart; cleared on commit
+
+Both fields are `null` during normal `running` state.
+
+### Lifecycle Audit Table
+
+Every operator action (`start`, `stop`, `pause`, `resume`, `rotate`, `restart`) now writes a row to
+the `lifecycle_actions` SQLite table. Query it for incident tracing:
+
+```sql
+SELECT * FROM lifecycle_actions ORDER BY id DESC LIMIT 20;
+```
+
+### Node Health Cycles
+
+Every scoring poll writes a row to `node_health_cycles`:
+
+```sql
+SELECT poll_cycle, series, healthy_nodes, quorum_met, created_at
+FROM node_health_cycles ORDER BY id DESC LIMIT 20;
+```
+
+Useful for debugging unexpected quorum decisions after an event.
+
+### Preflight Tool
+
+`setup_cli.py` now performs a full preflight: config validation, SSH reachability, series directory
+layout, and compose file parseability. Run before every deployment:
+
+```bash
+cd referee-server
+python setup_cli.py --series 1
+```
+
+### REFEREE_HOST Config
+
+Set `REFEREE_HOST=<your_referee_ip>` in `referee-server/.env` if your referee host is not
+`192.168.0.12`. This controls the host label shown in the telemetry dashboard.
+
+### Authoritative Design Reference
+
+See [`docs/architecture/production-remediation-design.md`](../architecture/production-remediation-design.md)
+for the full rationale, go/no-go criteria, and file-by-file change plan.

@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>KoTH Setup Wizard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0f111a;
+      --panel: #1a1d2d;
+      --primary: #4ade80;
+      --primary-hover: #22c55e;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --border: #334155;
+    }
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .wizard-container {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      width: 100%;
+      max-width: 500px;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5);
+    }
+    .wizard-header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .wizard-header h1 {
+      margin: 0 0 10px 0;
+      font-size: 24px;
+      color: var(--primary);
+    }
+    .wizard-header p {
+      margin: 0;
+      color: var(--text-muted);
+    }
+    .step {
+      display: none;
+    }
+    .step.active {
+      display: block;
+      animation: fadeIn 0.3s ease-in-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .btn {
+      width: 100%;
+      padding: 14px;
+      background: var(--primary);
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 10px;
+    }
+    .btn:hover {
+      background: var(--primary-hover);
+    }
+    .btn.secondary {
+      background: transparent;
+      color: var(--primary);
+      border: 1px solid var(--primary);
+    }
+    .btn.secondary:hover {
+      background: rgba(74, 222, 128, 0.1);
+    }
+    .step-indicator {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 30px;
+    }
+    .step-dot {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+    .step-dot.active {
+      background: var(--primary);
+      color: #000;
+    }
+    .step-dot.completed {
+      background: var(--primary-hover);
+      color: #000;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="wizard-container">
+    <div class="wizard-header">
+      <h1>KoTH Setup Wizard</h1>
+      <p id="step-desc">Initialize your control plane.</p>
+    </div>
+
+    <div class="step-indicator">
+      <div class="step-dot active" id="dot-1">1</div>
+      <div class="step-dot" id="dot-2">2</div>
+      <div class="step-dot" id="dot-3">3</div>
+    </div>
+
+    <form id="setupForm">
+      <!-- Step 1: Admin Account -->
+      <div class="step active" id="step-1">
+        <div class="form-group">
+          <label>Admin Username</label>
+          <input type="text" id="admin_username" required placeholder="admin">
+        </div>
+        <div class="form-group">
+          <label>Admin Password</label>
+          <input type="password" id="admin_password" required placeholder="Secure password">
+        </div>
+        <button type="button" class="btn" onclick="nextStep(2)">Next: Infrastructure</button>
+      </div>
+
+      <!-- Step 2: Infrastructure Node -->
+      <div class="step" id="step-2">
+        <div class="form-group">
+          <label>Primary Node Name</label>
+          <input type="text" id="node_name" required placeholder="Node 1">
+        </div>
+        <div class="form-group">
+          <label>Primary Node IP</label>
+          <input type="text" id="node_ip" required placeholder="192.168.1.10">
+        </div>
+        <div class="form-group">
+          <label>SSH User</label>
+          <input type="text" id="node_user" required value="ubuntu">
+        </div>
+        <button type="button" class="btn" onclick="nextStep(3)">Next: Assets</button>
+        <button type="button" class="btn secondary" onclick="nextStep(1)">Back</button>
+      </div>
+
+      <!-- Step 3: Assets -->
+      <div class="step" id="step-3">
+        <p style="text-align: center; margin-bottom: 20px;">Would you like to import the 8 bundled example challenge machines?</p>
+        <button type="button" class="btn" onclick="submitSetup(true)">Load Examples & Finish</button>
+        <button type="button" class="btn secondary" onclick="submitSetup(false)">Skip & Finish</button>
+        <button type="button" class="btn secondary" style="border: none;" onclick="nextStep(2)">Back</button>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function nextStep(stepNumber) {
+      // Basic validation
+      if (stepNumber === 2) {
+        if (!document.getElementById('admin_username').value || !document.getElementById('admin_password').value) {
+          alert('Please fill out admin credentials.');
+          return;
+        }
+      }
+      if (stepNumber === 3) {
+        if (!document.getElementById('node_name').value || !document.getElementById('node_ip').value) {
+          alert('Please fill out node details.');
+          return;
+        }
+      }
+
+      document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+      document.getElementById(`step-${stepNumber}`).classList.add('active');
+      
+      const descriptions = {
+        1: "Initialize your control plane.",
+        2: "Map your first physical deployment node.",
+        3: "Import vulnerable challenge instances."
+      };
+      document.getElementById('step-desc').innerText = descriptions[stepNumber];
+
+      for (let i = 1; i <= 3; i++) {
+        const dot = document.getElementById(`dot-${i}`);
+        if (i < stepNumber) {
+          dot.className = 'step-dot completed';
+        } else if (i === stepNumber) {
+          dot.className = 'step-dot active';
+        } else {
+          dot.className = 'step-dot';
+        }
+      }
+    }
+
+    async function submitSetup(loadExamples) {
+      const payload = {
+        admin_username: document.getElementById('admin_username').value,
+        admin_password: document.getElementById('admin_password').value,
+        node_name: document.getElementById('node_name').value,
+        node_ip: document.getElementById('node_ip').value,
+        node_user: document.getElementById('node_user').value,
+        load_examples: loadExamples
+      };
+
+      try {
+        const res = await fetch('/api/setup/initialize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          window.location.href = '/dashboard';
+        } else {
+          const err = await res.json();
+          alert(`Setup failed: ${err.detail}`);
+        }
+      } catch (err) {
+        alert('Setup failed due to a network error.');
+      }
+    }
+  </script>
+</body>
+</html>

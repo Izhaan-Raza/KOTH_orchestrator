@@ -1,82 +1,75 @@
-# KoTH Orchestrator
+# KoTH Orchestrator v2
 
-Distributed King-of-the-Hill competition platform for running replicated challenge rounds with a referee-managed control plane.
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11+-green.svg)
+![Architecture](https://img.shields.io/badge/architecture-dynamic_registry-orange.svg)
 
-## What This Repository Contains
+A premium, distributed King-of-the-Hill (KoTH) competition platform for running replicated vulnerable instances with a generalized, remote-orchestration control plane.
 
-- `referee-server/`: the real control plane, including the FastAPI app, scheduler, scoring, enforcement, recovery logic, dashboards, and tests
-- `Series H1/` through `Series H8/`: challenge packs, each with a per-series `docker-compose.yml` and three machine variants
-- `qa/`: service load probes, vulnerability validation, deployment checks, and live rule-matrix tooling
-- `docs/`: architecture, operations, gameplay, and design documentation
+## v2 Architecture Redesign
 
-## Operational Model
+The platform has been completely rebuilt from the ground up to eliminate hardcoded dependencies. Instead of static `docker-compose.yml` series and HAProxy routing, **v2 introduces a dynamic Machine Registry and Node Mapping system.**
 
-The production runtime is the distributed referee-managed model:
+You can now upload **any** machine specification (`.zip` containing a `koth-machine.yaml` and Dockerfile), register physical Node IPs, and orchestrate deployments instantly via the Web Dashboard or the sleek Terminal UI.
 
-- challenge nodes host node-local `h1..h8` directories with copied per-series compose files
-- the referee host activates and validates one series at a time over SSH
-- HAProxy exposure is kept aligned with the currently active series
-- scoring is based on quorum ownership of replicated variants, not on a single container's local state
-
-Root-level `docker-compose.yml` and `rotate.sh` are local/dev-only helpers. They are not the production control plane.
+```mermaid
+graph TD
+    A[Admin Dashboard / CLI] -->|API| B(Platform Server)
+    B -->|Registry| C[(SQLite: platform.db)]
+    B -->|SSH/Docker SDK| D[Node 1: 192.168.1.10]
+    B -->|SSH/Docker SDK| E[Node 2: 192.168.1.11]
+    F[Referee Server] -->|Polls API| B
+    F -->|SSH Score| D
+    F -->|SSH Score| E
+```
 
 ## Features
 
-- explicit runtime lifecycle: `stopped`, `starting`, `running`, `paused`, `rotating`, `faulted`, `stopping`
-- distributed deploy, validate, rollback, and recovery flows
-- quorum-based ownership and scoring
-- rule enforcement for `king.txt` tampering, persistence, listener drift, firewall drift, and credential-file drift
-- admin dashboard on `:8000` and participant board on `:9000`
-- operator team controls for create, ban, and unban
+- **Dynamic Registry**: Upload packaged machines via ZIP directly through the UI. No more manual `docker-compose` edits.
+- **Node Mappings**: Register remote servers (Nodes) by their IP, allowing you to seamlessly target deployments.
+- **Dual-Interface Management**: Manage your event through the **Premium Web Dashboard** or the **`rich`-powered Terminal UI**.
+- **Automated Setup Wizard**: First-time launch guides you through creating an Admin account, registering your first Node, and importing example challenge packs.
+- **Decoupled Scoring Engine**: The `referee` server operates independently, dynamically fetching active targets from the `platform` API.
 
 ## Repository Layout
 
 ```text
 .
-|-- referee-server/
-|-- Series H1/
-|-- Series H2/
-|-- Series H3/
-|-- Series H4/
-|-- Series H5/
-|-- Series H6/
-|-- Series H7/
-|-- Series H8/
-|-- qa/
-|-- docs/
-|-- docker-compose.yml
-`-- rotate.sh
+|-- platform/           # Core FastAPI orchestration server and Web UI
+|-- referee/            # Independent scoring engine
+|-- cli/                # Terminal UI (koth.py)
+|-- examples/           # Pre-built vulnerable machines (Series H1-H8)
+|-- docs/               # Architecture and operations documentation
+|-- docker-compose.yml  # Legacy local/dev helper
 ```
 
-## Local Development
+## Quick Start
 
-Run the referee service locally:
+### 1. Launch the Platform
+Navigate to the platform directory and start the orchestrator:
 
 ```bash
-cd referee-server
+cd platform
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 8000
+python -m uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-For local challenge-only experimentation, use the root `docker-compose.yml` or the per-series `orchestrator_hN.sh` helpers as development conveniences.
+### 2. Complete the Setup Wizard
+Open your browser to `http://localhost:8000/`. The platform will automatically redirect you to the **Initial Setup Wizard** to configure your master Admin account and initial infrastructure.
 
-## Production Deployment
+### 3. Use the Terminal UI (Optional)
+If you prefer managing the competition from the command line:
 
-Use the docs in [`docs/README.md`](docs/README.md), especially:
-
-- [Full Deployment Runbook](docs/operations/full-deployment-runbook.md)
-- [Deployment Validation Checklist](docs/operations/deployment-validation-checklist.md)
-- [Referee Rule Validation Checklist](docs/operations/referee-rule-validation-checklist.md)
+```bash
+cd cli
+pip install -r requirements.txt
+python koth.py status
+```
 
 ## Documentation
-
-- [Docs Index](docs/README.md)
-- [Referee Ruling Engine Architecture](docs/architecture/referee-ruling-engine-architecture.md)
-- [Machine Exploit Paths](docs/gameplay/machine-exploit-paths.md)
-- [Participant Hard-Bound Rules](docs/gameplay/participant-hard-bound-rules.md)
-- [Manual Tester Checklist](docs/operations/manual-tester-checklist.md)
-- [Codex H1A Player Prompt](docs/gameplay/codex-h1a-player-prompt.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
+- *Note: the `docs/` folder contains historical v1 documentation that is currently being updated for the v2 release.*
 
 ## Safety
 
-Run this project only in infrastructure you own or are explicitly authorized to use. The challenge services are intentionally vulnerable, and parts of the QA tooling execute real exploit probes against those intentionally weak targets.
+Run this project only in infrastructure you own or are explicitly authorized to use. The challenge services are intentionally vulnerable.

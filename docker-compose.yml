@@ -1,9 +1,15 @@
+# =============================================================================
+# LOCAL DEVELOPMENT ONLY — NOT the production control plane.
+# The production runtime is referee-server/ with per-node compose files under
+# REMOTE_SERIES_ROOT/h{1..8}/ on each challenge node.
+# See docs/operations/full-deployment-runbook.md for the real deployment model.
+# =============================================================================
 services:
   # ============================================================
   # HOUR 1
   # ============================================================
   machineH1A:
-    build: ./Series H1/machineH1A
+    build: ./examples/Series H1/machineH1A
     container_name: machineH1A
     image: machineh1a
     ports:
@@ -13,7 +19,7 @@ services:
       - SYS_ADMIN
 
   machineH1B:
-    build: ./Series H1/machineH1B
+    build: ./examples/Series H1/machineH1B
     container_name: machineH1B
     image: machineh1b
     ports:
@@ -22,7 +28,7 @@ services:
     restart: unless-stopped
 
   machineH1C:
-    build: ./Series H1/machineH1C
+    build: ./examples/Series H1/machineH1C
     container_name: machineH1C
     image: machineh1c
     ports:
@@ -35,7 +41,7 @@ services:
   # HOUR 2
   # ============================================================
   machineH2A:
-    build: ./Series H2/machineH2A
+    build: ./examples/Series H2/machineH2A
     container_name: machineH2A
     image: machineh2a
     ports:
@@ -43,7 +49,7 @@ services:
     restart: unless-stopped
 
   machineH2B:
-    build: ./Series H2/machineH2B
+    build: ./examples/Series H2/machineH2B
     container_name: machineH2B
     image: machineh2b
     ports:
@@ -51,7 +57,7 @@ services:
     restart: unless-stopped
 
   machineH2C:
-    build: ./Series H2/machineH2C
+    build: ./examples/Series H2/machineH2C
     container_name: machineH2C
     image: machineh2c
     ports:
@@ -62,7 +68,7 @@ services:
   # HOUR 3
   # ============================================================
   machineH3A:
-    build: ./Series H3/machineH3A
+    build: ./examples/Series H3/machineH3A
     container_name: machineH3A
     image: machineh3a
     ports:
@@ -73,7 +79,7 @@ services:
       - SYS_ADMIN
 
   machineH3B:
-    build: ./Series H3/machineH3B
+    build: ./examples/Series H3/machineH3B
     container_name: machineH3B
     image: machineh3b
     ports:
@@ -81,7 +87,7 @@ services:
     restart: unless-stopped
 
   machineH3C:
-    build: ./Series H3/machineH3C
+    build: ./examples/Series H3/machineH3C
     container_name: machineH3C
     image: machineh3c
     ports:
@@ -94,7 +100,7 @@ services:
   # HOUR 4
   # ============================================================
   machineH4A:
-    build: ./Series H4/machineH4A
+    build: ./examples/Series H4/machineH4A
     container_name: machineH4A
     image: machineh4a
     ports:
@@ -102,7 +108,7 @@ services:
     restart: unless-stopped
 
   machineH4B:
-    build: ./Series H4/machineH4B
+    build: ./examples/Series H4/machineH4B
     container_name: machineH4B
     image: machineh4b
     ports:
@@ -110,7 +116,7 @@ services:
     restart: unless-stopped
 
   machineH4C:
-    build: ./Series H4/machineH4C
+    build: ./examples/Series H4/machineH4C
     container_name: machineH4C
     image: machineh4c
     ports:
@@ -121,7 +127,7 @@ services:
   # HOUR 5
   # ============================================================
   machineH5A:
-    build: ./Series H5/machineH5A
+    build: ./examples/Series H5/machineH5A
     container_name: machineH5A
     image: machineh5a
     ports:
@@ -129,7 +135,7 @@ services:
     restart: unless-stopped
 
   machineH5B:
-    build: ./Series H5/machineH5B
+    build: ./examples/Series H5/machineH5B
     container_name: machineH5B
     image: machineh5b
     ports:
@@ -137,7 +143,7 @@ services:
     restart: unless-stopped
 
   machineH5C:
-    build: ./Series H5/machineH5C
+    build: ./examples/Series H5/machineH5C
     container_name: machineH5C
     image: machineh5c
     ports:
@@ -148,7 +154,7 @@ services:
   # HOUR 6
   # ============================================================
   machineH6A:
-    build: ./Series H6/machineH6A
+    build: ./examples/Series H6/machineH6A
     container_name: machineH6A
     image: machineh6a
     ports:
@@ -160,7 +166,7 @@ services:
       - NET_ADMIN
 
   machineH6B:
-    build: ./Series H6/machineH6B
+    build: ./examples/Series H6/machineH6B
     container_name: machineH6B
     image: machineh6b
     ports:
@@ -171,7 +177,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock # Docker.sock for PrivEsc
 
   machineH6C:
-    build: ./Series H6/machineH6C
+    build: ./examples/Series H6/machineH6C
     container_name: machineH6C
     image: machineh6c
     ports:
@@ -185,7 +191,7 @@ services:
   # HOUR 7
   # ============================================================
   machineH7A:
-    build: ./Series H7/machineH7A
+    build: ./examples/Series H7/machineH7A
     container_name: machineH7A
     image: machineh7a
     ports:
@@ -194,7 +200,7 @@ services:
     restart: unless-stopped
 
   machineH7B:
-    build: ./Series H7/machineH7B
+    build: ./examples/Series H7/machineH7B
     container_name: machineH7B
     image: machineh7b
     ports:
@@ -202,7 +208,7 @@ services:
     restart: unless-stopped
 
   machineH7C:
-    build: ./Series H7/machineH7C
+    build: ./examples/Series H7/machineH7C
     container_name: machineH7C
     image: machineh7c
     ports:
@@ -213,7 +219,7 @@ services:
   # HOUR 8
   # ============================================================
   machineH8A:
-    build: ./Series H8/machineH8A
+    build: ./examples/Series H8/machineH8A
     container_name: machineH8A
     image: machineh8a
     ports:
@@ -221,7 +227,7 @@ services:
     restart: unless-stopped
 
   machineH8B:
-    build: ./Series H8/machineH8B
+    build: ./examples/Series H8/machineH8B
     container_name: machineH8B
     image: machineh8b
     ports:
@@ -229,7 +235,7 @@ services:
     restart: unless-stopped
 
   machineH8C:
-    build: ./Series H8/machineH8C
+    build: ./examples/Series H8/machineH8C
     container_name: machineH8C
     image: machineh8c
     ports:
