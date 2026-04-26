@@ -40,40 +40,40 @@ def initialize_platform(payload: SetupPayload, db_path: str = Depends(get_db_pat
             (node_id, payload.node_name, payload.node_ip, payload.node_user)
         )
         
-        # 3. Load Examples if requested
-        if payload.load_examples:
-            examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "examples")
-            if os.path.exists(examples_dir):
-                for i in range(1, 9):
-                    series_dir = os.path.join(examples_dir, f"Series H{i}")
-                    if os.path.isdir(series_dir):
-                        compose_file = os.path.join(series_dir, "docker-compose.yml")
-                        if os.path.exists(compose_file):
-                            try:
-                                info = normalize_compose(compose_file)
-                                spec = {
-                                    "name": f"Series H{i}",
-                                    "difficulty": "medium",
-                                    "points_per_tick": 10,
-                                    "king_file": "/root/king.txt",
-                                    "build_context": series_dir,
-                                    "image": info["image"],
-                                    "ports": info["ports"]
-                                }
-                                machine_id = str(uuid.uuid4())
-                                register_machine(db_path, machine_id, spec)
-                            except Exception as e:
-                                pass # Skip on error
-        
-        # 4. Generate API Key
-        api_key = secrets.token_urlsafe(32)
-        os.environ["ADMIN_API_KEY"] = api_key
-        
-        # Write to .env
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-        with open(env_path, "a") as f:
-            f.write(f"\nADMIN_API_KEY={api_key}\n")
-                                
+    # 3. Load Examples if requested
+    if payload.load_examples:
+        examples_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "examples")
+        if os.path.exists(examples_dir):
+            for i in range(1, 9):
+                series_dir = os.path.join(examples_dir, f"Series H{i}")
+                if os.path.isdir(series_dir):
+                    compose_file = os.path.join(series_dir, "docker-compose.yml")
+                    if os.path.exists(compose_file):
+                        try:
+                            info = normalize_compose(compose_file)
+                            spec = {
+                                "name": f"Series H{i}",
+                                "difficulty": "medium",
+                                "points_per_tick": 10,
+                                "king_file": "/root/king.txt",
+                                "build_context": series_dir,
+                                "image": info["image"],
+                                "ports": info["ports"]
+                            }
+                            machine_id = str(uuid.uuid4())
+                            register_machine(db_path, machine_id, spec)
+                        except Exception as e:
+                            pass # Skip on error
+    
+    # 4. Generate API Key
+    api_key = secrets.token_urlsafe(32)
+    os.environ["ADMIN_API_KEY"] = api_key
+    
+    # Write to .env
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    with open(env_path, "a") as f:
+        f.write(f"\nADMIN_API_KEY={api_key}\n")
+                            
     return {"status": "initialized", "api_key": api_key}
 
 @router.get("/api/setup/status")
