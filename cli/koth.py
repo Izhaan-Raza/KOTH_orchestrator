@@ -6,8 +6,13 @@ from rich.table import Table
 from rich.panel import Panel
 import sys
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), "platform", ".env"))
+
 API_BASE = "http://localhost:8000/api"
-API_KEY = "admin" # Configure this or pull from env
+API_KEY = os.environ.get("ADMIN_API_KEY", "")
 
 console = Console()
 

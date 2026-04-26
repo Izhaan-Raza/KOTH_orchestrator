@@ -11,7 +11,7 @@ from api import machines, upload, deploy, setup, accounts, nodes, legacy
 
 load_dotenv()
 
-def require_admin_api_key(x_admin_key: str | None = Header(default=None)):
+def require_admin_api_key(x_api_key: str | None = Header(default=None)):
     expected_key = os.environ.get("ADMIN_API_KEY")
     allow_unsafe = os.environ.get("ALLOW_UNSAFE_NO_ADMIN_API_KEY", "false").lower() == "true"
     
@@ -20,7 +20,7 @@ def require_admin_api_key(x_admin_key: str | None = Header(default=None)):
             return
         raise HTTPException(status_code=500, detail="Server misconfigured: ADMIN_API_KEY not set")
         
-    if x_admin_key != expected_key:
+    if x_api_key != expected_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 @asynccontextmanager
