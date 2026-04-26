@@ -46,7 +46,7 @@ app.include_router(upload.router, dependencies=[Depends(require_admin_api_key)])
 app.include_router(deploy.router, dependencies=[Depends(require_admin_api_key)])
 app.include_router(accounts.router, dependencies=[Depends(require_admin_api_key)])
 app.include_router(nodes.router, dependencies=[Depends(require_admin_api_key)])
-app.include_router(legacy.router)
+app.include_router(legacy.router, dependencies=[Depends(require_admin_api_key)])
 
 # UI Setup
 static_dir = os.path.join(os.path.dirname(__file__), "static")
