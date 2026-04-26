@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 os.environ["DB_PATH"] = "test_platform.db"
 
 from app import app
-from engine.db import Database, get_connection
+from engine.db import apply_migrations
 
 client = TestClient(app)
 
@@ -15,8 +15,8 @@ def setup_teardown():
     # Setup
     if os.path.exists("test_platform.db"):
         os.remove("test_platform.db")
-    db = Database("test_platform.db")
-    db.initialize()
+    migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "migrations")
+    apply_migrations("test_platform.db", migrations_dir)
     
     yield
     
@@ -62,7 +62,7 @@ def test_authorized_access_with_admin_key():
     os.environ["ADMIN_API_KEY"] = "secret123"
     
     # Needs to hit a protected route
-    headers = {"X-Admin-Key": "secret123"}
+    headers = {"X-API-Key": "secret123"}
     response = client.get("/api/nodes", headers=headers)
     assert response.status_code == 200
     assert isinstance(response.json(), list)
